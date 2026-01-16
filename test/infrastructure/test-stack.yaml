@@ -1,0 +1,429 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'termiNATor Test Infrastructure - Creates VPC with NAT Gateway for testing'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: terminator-test
+    Description: Environment name prefix for resources
+
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-vpc
+        - Key: Purpose
+          Value: termiNATor-test
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-igw
+        - Key: Purpose
+          Value: termiNATor-test
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-subnet
+        - Key: Purpose
+          Value: termiNATor-test
+
+  # Private Subnet
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-subnet
+        - Key: Purpose
+          Value: termiNATor-test
+
+  # Elastic IP for NAT Gateway
+  NATGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat-eip
+        - Key: Purpose
+          Value: termiNATor-test
+
+  # NAT Gateway
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat
+        - Key: Purpose
+          Value: termiNATor-test
+
+  # Public Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-rt
+        - Key: Purpose
+          Value: termiNATor-test
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Private Route Table (routes to NAT)
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-rt
+        - Key: Purpose
+          Value: termiNATor-test
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  # Security Group for EC2 Instance
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${EnvironmentName}-instance-sg
+      GroupDescription: Security group for test EC2 instance
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-instance-sg
+        - Key: Purpose
+          Value: termiNATor-test
+
+  # IAM Role for EC2 Instance
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-instance-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: S3DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub ${TestBucket.Arn}
+                  - !Sub ${TestBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                Resource: !GetAtt TestTable.Arn
+      Tags:
+        - Key: Purpose
+          Value: termiNATor-test
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${EnvironmentName}-instance-profile
+      Roles:
+        - !Ref InstanceRole
+
+  # EC2 Instance in Private Subnet
+  TestInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      InstanceType: t3.micro
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+            - ''
+            - - |
+                #!/bin/bash
+                yum update -y
+                yum install -y aws-cli jq
+                
+                # Set bucket and table names
+                BUCKET_NAME='
+              - !Ref TestBucket
+              - |
+                '
+                TABLE_NAME='
+              - !Ref TestTable
+              - |
+                '
+                
+                # Create test script
+                cat > /home/ec2-user/generate-traffic.sh << 'EOFSCRIPT'
+                #!/bin/bash
+                DURATION=${1:-5}
+                S3_REQUESTS=${2:-100}
+                DDB_REQUESTS=${3:-50}
+                BUCKET=${4}
+                TABLE=${5}
+                
+                # Use defaults if not provided
+                BUCKET=${BUCKET:-$BUCKET_NAME}
+                TABLE=${TABLE:-$TABLE_NAME}
+                
+                echo "Generating test traffic for $DURATION minutes..."
+                echo "S3 requests: $S3_REQUESTS, DynamoDB requests: $DDB_REQUESTS"
+                echo "Bucket: $BUCKET, Table: $TABLE"
+                
+                END_TIME=$(($(date +%s) + $DURATION * 60))
+                
+                while [ $(date +%s) -lt $END_TIME ]; do
+                  # S3 traffic
+                  for i in $(seq 1 $S3_REQUESTS); do
+                    aws s3 cp s3://$BUCKET/test-file.bin /tmp/test-$i.bin 2>/dev/null
+                    rm -f /tmp/test-$i.bin
+                  done
+                  
+                  # DynamoDB traffic
+                  for i in $(seq 1 $DDB_REQUESTS); do
+                    aws dynamodb scan --table-name $TABLE --max-items 10 >/dev/null 2>&1
+                  done
+                  
+                  echo "Completed batch at $(date)"
+                  sleep 10
+                done
+                
+                echo "Traffic generation complete"
+                EOFSCRIPT
+                
+                # Make script use the bucket and table names by default
+                sed -i "s/BUCKET_NAME/$BUCKET_NAME/g" /home/ec2-user/generate-traffic.sh
+                sed -i "s/TABLE_NAME/$TABLE_NAME/g" /home/ec2-user/generate-traffic.sh
+                
+                chmod +x /home/ec2-user/generate-traffic.sh
+                chown ec2-user:ec2-user /home/ec2-user/generate-traffic.sh
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-test-instance
+        - Key: Purpose
+          Value: termiNATor-test
+
+  # S3 Bucket for Test Data
+  TestBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${EnvironmentName}-bucket-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Purpose
+          Value: termiNATor-test
+
+  # DynamoDB Table for Test Data
+  TestTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${EnvironmentName}-table
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      Tags:
+        - Key: Purpose
+          Value: termiNATor-test
+
+  # Lambda function to populate test data
+  PopulateTestDataFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${EnvironmentName}-populate-data
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt PopulateTestDataRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import os
+          
+          s3 = boto3.client('s3')
+          dynamodb = boto3.resource('dynamodb')
+          
+          def handler(event, context):
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+                  
+                  bucket = event['ResourceProperties']['BucketName']
+                  table_name = event['ResourceProperties']['TableName']
+                  
+                  # Create 1MB test file in S3
+                  test_data = b'0' * (1024 * 1024)  # 1MB
+                  s3.put_object(Bucket=bucket, Key='test-file.bin', Body=test_data)
+                  
+                  # Populate DynamoDB with test items
+                  table = dynamodb.Table(table_name)
+                  for i in range(100):
+                      table.put_item(Item={'id': f'test-{i}', 'data': f'test-data-{i}'})
+                  
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  print(f"Error: {e}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+  PopulateTestDataRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub ${TestBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt TestTable.Arn
+
+  PopulateTestData:
+    Type: Custom::PopulateTestData
+    Properties:
+      ServiceToken: !GetAtt PopulateTestDataFunction.Arn
+      BucketName: !Ref TestBucket
+      TableName: !Ref TestTable
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${EnvironmentName}-vpc-id
+
+  NATGatewayId:
+    Description: NAT Gateway ID
+    Value: !Ref NATGateway
+    Export:
+      Name: !Sub ${EnvironmentName}-nat-id
+
+  PrivateSubnetId:
+    Description: Private Subnet ID
+    Value: !Ref PrivateSubnet
+    Export:
+      Name: !Sub ${EnvironmentName}-private-subnet-id
+
+  PrivateRouteTableId:
+    Description: Private Route Table ID
+    Value: !Ref PrivateRouteTable
+    Export:
+      Name: !Sub ${EnvironmentName}-private-rt-id
+
+  TestInstanceId:
+    Description: Test EC2 Instance ID
+    Value: !Ref TestInstance
+    Export:
+      Name: !Sub ${EnvironmentName}-instance-id
+
+  TestBucketName:
+    Description: Test S3 Bucket Name
+    Value: !Ref TestBucket
+    Export:
+      Name: !Sub ${EnvironmentName}-bucket-name
+
+  TestTableName:
+    Description: Test DynamoDB Table Name
+    Value: !Ref TestTable
+    Export:
+      Name: !Sub ${EnvironmentName}-table-name
+
+  TrafficGenerationCommand:
+    Description: Command to generate test traffic
+    Value: !Sub 'aws ssm start-session --target ${TestInstance} --document-name AWS-StartInteractiveCommand --parameters command="/home/ec2-user/generate-traffic.sh 5 100 50"'
