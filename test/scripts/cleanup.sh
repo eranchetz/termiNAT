@@ -30,6 +30,24 @@ if [ "$CONFIRM" != "yes" ]; then
 fi
 
 echo ""
+
+# Get S3 bucket name and empty it
+echo -e "${YELLOW}Emptying S3 bucket...${NC}"
+BUCKET=$(aws cloudformation describe-stacks \
+    --stack-name "$STACK_NAME" \
+    --region "$REGION" \
+    --query 'Stacks[0].Outputs[?OutputKey==`TestBucketName`].OutputValue' \
+    --output text 2>/dev/null || echo "")
+
+if [ -n "$BUCKET" ]; then
+    echo "Bucket: $BUCKET"
+    aws s3 rm s3://$BUCKET --recursive --region "$REGION" 2>/dev/null || true
+    echo -e "${GREEN}Bucket emptied${NC}"
+else
+    echo "No bucket found or already deleted"
+fi
+
+echo ""
 echo -e "${YELLOW}Deleting stack...${NC}"
 
 # Delete stack

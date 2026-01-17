@@ -137,6 +137,7 @@ gh release create "$VERSION" \
   --repo "$REPO" \
   --title "termiNATor $VERSION" \
   --notes-file dist/release-notes.md \
+  --prerelease \
   dist/terminator-linux-amd64 \
   dist/terminator-linux-arm64 \
   dist/terminator-darwin-amd64 \

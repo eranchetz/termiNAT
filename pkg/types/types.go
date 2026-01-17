@@ -4,26 +4,26 @@ import "time"
 
 // NATGateway represents a NAT Gateway with its metadata
 type NATGateway struct {
-	ID               string
-	VPCID            string
-	SubnetID         string
-	State            string
-	ConnectivityType string
-	AvailabilityMode string // "zonal" or "regional"
+	ID                 string
+	VPCID              string
+	SubnetID           string
+	State              string
+	ConnectivityType   string
+	AvailabilityMode   string // "zonal" or "regional"
 	NetworkInterfaceID string // For zonal NAT
-	Tags             map[string]string
+	Tags               map[string]string
 }
 
 // VPCEndpoint represents a VPC endpoint
 type VPCEndpoint struct {
-	ID           string
-	VPCID        string
-	ServiceName  string
-	Type         string // "Gateway" or "Interface"
-	State        string
-	RouteTables  []string
-	PrivateDNS   bool
-	Tags         map[string]string
+	ID          string
+	VPCID       string
+	ServiceName string
+	Type        string // "Gateway" or "Interface"
+	State       string
+	RouteTables []string
+	PrivateDNS  bool
+	Tags        map[string]string
 }
 
 // RouteTable represents a VPC route table
@@ -66,19 +66,18 @@ type TrafficAnalysis struct {
 
 // CostEstimate represents cost calculations
 type CostEstimate struct {
-	Service                string
-	CurrentNATCost         float64
-	ProjectedEndpointCost  float64
-	MonthlySavings         float64
-	ConfidenceLevel        string
+	Service               string
+	CurrentNATCost        float64
+	ProjectedEndpointCost float64
+	MonthlySavings        float64
+	ConfidenceLevel       string
 }
 
 // FlowLog represents a VPC Flow Log
 type FlowLog struct {
-	ID             string
-	ResourceID     string
-	Status         string
-	LogGroupName   string
-	CreationTime   time.Time
+	ID           string
+	ResourceID   string
+	Status       string
+	LogGroupName string
+	CreationTime time.Time
 }
-

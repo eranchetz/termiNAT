@@ -20,8 +20,8 @@ type IPPrefix struct {
 }
 
 type TrafficClassifier struct {
-	s3Ranges       []*net.IPNet
-	dynamoRanges   []*net.IPNet
+	s3Ranges     []*net.IPNet
+	dynamoRanges []*net.IPNet
 }
 
 func NewTrafficClassifier() (*TrafficClassifier, error) {

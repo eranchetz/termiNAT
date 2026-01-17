@@ -196,7 +196,6 @@ func stringPtr(s string) *string {
 	return &s
 }
 
-
 // CreateFlowLogs creates VPC Flow Logs for NAT Gateway analysis
 func (c *EC2Client) CreateFlowLogs(ctx context.Context, nat pkgtypes.NATGateway, logGroupName string, deliveryRoleArn string, runID string) (string, error) {
 	// Determine resource type and ID based on NAT mode
@@ -217,14 +216,14 @@ func (c *EC2Client) CreateFlowLogs(ctx context.Context, nat pkgtypes.NATGateway,
 	logFormat := "${interface-id} ${srcaddr} ${dstaddr} ${pkt-srcaddr} ${pkt-dstaddr} ${srcport} ${dstport} ${protocol} ${packets} ${bytes} ${start} ${end} ${action} ${log-status}"
 
 	input := &ec2.CreateFlowLogsInput{
-		ResourceType:         resourceType,
-		ResourceIds:          []string{resourceID},
-		TrafficType:          types.TrafficTypeAll,
-		LogDestinationType:   types.LogDestinationTypeCloudWatchLogs,
-		LogGroupName:         &logGroupName,
+		ResourceType:             resourceType,
+		ResourceIds:              []string{resourceID},
+		TrafficType:              types.TrafficTypeAll,
+		LogDestinationType:       types.LogDestinationTypeCloudWatchLogs,
+		LogGroupName:             &logGroupName,
 		DeliverLogsPermissionArn: &deliveryRoleArn,
-		LogFormat:            &logFormat,
-		MaxAggregationInterval: intPtr(60), // 60 seconds for faster data
+		LogFormat:                &logFormat,
+		MaxAggregationInterval:   intPtr(60), // 60 seconds for faster data
 		TagSpecifications: []types.TagSpecification{
 			{
 				ResourceType: types.ResourceTypeVpcFlowLog,
@@ -314,11 +313,11 @@ func (c *EC2Client) DescribeFlowLogs(ctx context.Context, flowLogIDs []string) (
 	var flowLogs []pkgtypes.FlowLog
 	for _, fl := range result.FlowLogs {
 		flowLog := pkgtypes.FlowLog{
-			ID:             *fl.FlowLogId,
-			ResourceID:     *fl.ResourceId,
-			Status:         *fl.FlowLogStatus,
-			LogGroupName:   stringValue(fl.LogGroupName),
-			CreationTime:   *fl.CreationTime,
+			ID:           *fl.FlowLogId,
+			ResourceID:   *fl.ResourceId,
+			Status:       *fl.FlowLogStatus,
+			LogGroupName: stringValue(fl.LogGroupName),
+			CreationTime: *fl.CreationTime,
 		}
 		flowLogs = append(flowLogs, flowLog)
 	}

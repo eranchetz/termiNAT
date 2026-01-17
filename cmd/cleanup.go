@@ -23,8 +23,8 @@ Log groups incur storage costs (~$0.50/GB/month), so cleanup after analysis is r
 }
 
 var (
-	logGroupName string
-	force        bool
+	logGroupName  string
+	force         bool
 	cleanupRegion string
 )
 
