@@ -11,16 +11,19 @@ type SourceIPStats struct {
 	Records int
 	S3      int64
 	Dynamo  int64
+	ECR     int64
 	Other   int64
 }
 
 type TrafficStats struct {
 	S3Bytes       int64
 	DynamoBytes   int64
+	ECRBytes      int64
 	OtherBytes    int64
 	TotalBytes    int64
 	S3Records     int
 	DynamoRecords int
+	ECRRecords    int
 	OtherRecords  int
 	TotalRecords  int
 	SourceIPs     map[string]*SourceIPStats
@@ -74,6 +77,10 @@ func (ta *TrafficAnalyzer) AnalyzeFlowLogs(logLines []string) (*TrafficStats, er
 			ta.stats.DynamoBytes += record.Bytes
 			ta.stats.DynamoRecords++
 			ta.stats.SourceIPs[record.SrcAddr].Dynamo += record.Bytes
+		case "ecr":
+			ta.stats.ECRBytes += record.Bytes
+			ta.stats.ECRRecords++
+			ta.stats.SourceIPs[record.SrcAddr].ECR += record.Bytes
 		default:
 			ta.stats.OtherBytes += record.Bytes
 			ta.stats.OtherRecords++
@@ -109,6 +116,13 @@ func (ts *TrafficStats) DynamoPercentage() float64 {
 		return 0
 	}
 	return float64(ts.DynamoBytes) / float64(ts.TotalBytes) * 100
+}
+
+func (ts *TrafficStats) ECRPercentage() float64 {
+	if ts.TotalBytes == 0 {
+		return 0
+	}
+	return float64(ts.ECRBytes) / float64(ts.TotalBytes) * 100
 }
 
 func (ts *TrafficStats) OtherPercentage() float64 {

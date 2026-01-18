@@ -187,6 +187,17 @@ Resources:
                   - dynamodb:GetItem
                   - dynamodb:PutItem
                 Resource: !GetAtt TestTable.Arn
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                Resource: '*'
       Tags:
         - Key: Purpose
           Value: termiNATor-test
@@ -215,15 +226,22 @@ Resources:
             - - |
                 #!/bin/bash
                 yum update -y
-                yum install -y aws-cli jq
+                yum install -y aws-cli jq docker
+                systemctl start docker
+                systemctl enable docker
+                usermod -a -G docker ec2-user
                 
-                # Set bucket and table names
+                # Set bucket, table, and repo names
                 BUCKET_NAME='
               - !Ref TestBucket
               - |
                 '
                 TABLE_NAME='
               - !Ref TestTable
+              - |
+                '
+                REPO_URI='
+              - !GetAtt TestRepository.RepositoryUri
               - |
                 '
                 
@@ -235,14 +253,24 @@ Resources:
                 DDB_REQUESTS=${3:-50}
                 BUCKET=${4}
                 TABLE=${5}
+                REPO=${6}
                 
                 # Use defaults if not provided
                 BUCKET=${BUCKET:-$BUCKET_NAME}
                 TABLE=${TABLE:-$TABLE_NAME}
+                REPO=${REPO:-$REPO_URI}
                 
                 echo "Generating test traffic for $DURATION minutes..."
                 echo "S3 requests: $S3_REQUESTS, DynamoDB requests: $DDB_REQUESTS"
-                echo "Bucket: $BUCKET, Table: $TABLE"
+                echo "Bucket: $BUCKET, Table: $TABLE, Repo: $REPO"
+                
+                # ECR login
+                aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $REPO
+                
+                # Create a minimal test image
+                mkdir -p /tmp/docker-test
+                echo "FROM public.ecr.aws/lambda/python:3.12" > /tmp/docker-test/Dockerfile
+                echo "CMD echo test" >> /tmp/docker-test/Dockerfile
                 
                 END_TIME=$(($(date +%s) + $DURATION * 60))
                 
@@ -258,6 +286,12 @@ Resources:
                     aws dynamodb scan --table-name $TABLE --max-items 10 >/dev/null 2>&1
                   done
                   
+                  # ECR traffic - push image every iteration
+                  TAG=$(date +%s)
+                  docker build -t $REPO:$TAG /tmp/docker-test >/dev/null 2>&1
+                  docker push $REPO:$TAG >/dev/null 2>&1
+                  docker rmi $REPO:$TAG >/dev/null 2>&1
+                  
                   echo "Completed batch at $(date)"
                   sleep 10
                 done
@@ -265,9 +299,10 @@ Resources:
                 echo "Traffic generation complete"
                 EOFSCRIPT
                 
-                # Make script use the bucket and table names by default
-                sed -i "s/BUCKET_NAME/$BUCKET_NAME/g" /home/ec2-user/generate-traffic.sh
-                sed -i "s/TABLE_NAME/$TABLE_NAME/g" /home/ec2-user/generate-traffic.sh
+                # Make script use the bucket, table, and repo names by default
+                sed -i "s|BUCKET_NAME|$BUCKET_NAME|g" /home/ec2-user/generate-traffic.sh
+                sed -i "s|TABLE_NAME|$TABLE_NAME|g" /home/ec2-user/generate-traffic.sh
+                sed -i "s|REPO_URI|$REPO_URI|g" /home/ec2-user/generate-traffic.sh
                 
                 chmod +x /home/ec2-user/generate-traffic.sh
                 chown ec2-user:ec2-user /home/ec2-user/generate-traffic.sh
@@ -303,6 +338,17 @@ Resources:
       KeySchema:
         - AttributeName: id
           KeyType: HASH
+      Tags:
+        - Key: Purpose
+          Value: termiNATor-test
+
+  # ECR Repository for Test Data
+  TestRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${EnvironmentName}-repo
+      ImageScanningConfiguration:
+        ScanOnPush: false
       Tags:
         - Key: Purpose
           Value: termiNATor-test
@@ -423,6 +469,12 @@ Outputs:
     Value: !Ref TestTable
     Export:
       Name: !Sub ${EnvironmentName}-table-name
+
+  TestRepositoryUri:
+    Description: Test ECR Repository URI
+    Value: !GetAtt TestRepository.RepositoryUri
+    Export:
+      Name: !Sub ${EnvironmentName}-repo-uri
 
   TrafficGenerationCommand:
     Description: Command to generate test traffic

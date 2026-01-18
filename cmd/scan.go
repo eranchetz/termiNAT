@@ -10,9 +10,11 @@ import (
 )
 
 var (
-	region   string
-	duration int
-	natIDs   []string
+	region      string
+	duration    int
+	natIDs      []string
+	autoApprove bool
+	autoCleanup bool
 )
 
 var scanCmd = &cobra.Command{
@@ -48,6 +50,8 @@ func init() {
 	// Deep scan specific flags
 	deepCmd.Flags().IntVarP(&duration, "duration", "d", 15, "Flow Log collection duration in minutes (max 60)")
 	deepCmd.Flags().StringSliceVar(&natIDs, "nat-gateway-ids", []string{}, "Specific NAT Gateway IDs to analyze (optional)")
+	deepCmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Skip approval prompts (for automation)")
+	deepCmd.Flags().BoolVar(&autoCleanup, "auto-cleanup", false, "Automatically delete log groups after scan")
 }
 
 func runQuickScan(cmd *cobra.Command, args []string) error {
@@ -78,5 +82,5 @@ func runDeepScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Run deep scan with UI
-	return ui.RunDeepScan(ctx, scanner, region, duration, natIDs)
+	return ui.RunDeepScan(ctx, scanner, region, duration, natIDs, autoApprove, autoCleanup)
 }

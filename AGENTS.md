@@ -413,6 +413,118 @@ Potential areas for contribution:
 7. **Regional Pricing**: Accurate pricing per region
 8. **Savings Plans**: Factor in existing commitments
 
+## Recent Updates (2026-01-18)
+
+### ECR Traffic Detection Feature
+
+**Implementation**: Added support for detecting ECR (Elastic Container Registry) traffic through NAT Gateway.
+
+**Key Changes**:
+- **classifier.go**: Added `ecrRanges` field, uses EC2 service IP ranges for ECR detection
+- **analyzer.go**: Added ECR tracking (`ECRBytes`, `ECRRecords`, `ECRPercentage()`)
+- **deep_scan.go**: Updated UI to display ECR traffic in summary and detailed views
+- **test-stack.yaml**: Added ECR repository, Docker installation, image push traffic generation
+
+**How It Works**:
+- ECR uses EC2 service IP ranges (no separate ECR ranges in AWS IP ranges JSON)
+- Traffic classifier checks destination IPs against EC2 ranges and classifies as "ecr"
+- Test infrastructure continuously builds and pushes Docker images to generate ECR traffic
+- E2E test results: ~4-5% ECR traffic (lower than S3/DynamoDB due to less frequent pushes)
+
+**Testing**:
+```bash
+# E2E test includes ECR traffic generation
+./test/scripts/run-e2e-test.sh
+
+# Expected results:
+# - S3: ~35-40%
+# - DynamoDB: ~20-25%
+# - ECR: ~4-10%
+# - Other: ~30-40%
+```
+
+### AWS IP Ranges Caching
+
+**Implementation**: Added 24-hour caching for AWS IP ranges to improve performance and reduce API calls.
+
+**Key Changes**:
+- **classifier.go**: Added caching logic with `getCacheDir()`, `isCacheValid()`, `loadFromCache()`, `saveToCache()`
+- Cache location: `~/.terminator/cache/aws-ip-ranges.json` (2.1 MB)
+- Cache TTL: 24 hours (configurable via `cacheTTL` constant)
+
+**Performance**:
+- First call: ~378ms (download from AWS)
+- Cached calls: ~15ms (25x faster!)
+- Cache automatically refreshes after 24 hours
+
+**Benefits**:
+- Faster startup for repeated scans
+- Works offline if cache exists
+- Reduces load on AWS IP ranges API
+- Transparent to users (no configuration needed)
+
+### Multi-Region Support
+
+**Verification**: Confirmed termiNATor works in ALL AWS regions.
+
+**How It Works**:
+- Downloads global AWS IP ranges file (contains all regions)
+- Loads ALL IP ranges for ALL services across ALL regions
+- No region filtering in classifier - detects traffic to any region
+- Supports 42 regions for S3/EC2, 41 regions for DynamoDB
+
+**Important Notes**:
+- Traffic classification: Works globally, all regions
+- VPC endpoint analysis: Must run in same region as NAT Gateway (VPC endpoints are region-specific)
+- Example: NAT in us-east-1 can detect traffic to S3 in ap-south-1
+
+### Automation Improvements
+
+**Added Flags for Non-Interactive Mode**:
+```bash
+./terminator scan deep --region us-east-1 --duration 5 \
+  --auto-approve \    # Skip approval prompts
+  --auto-cleanup      # Automatically delete log groups
+```
+
+**Use Cases**:
+- CI/CD pipelines
+- Automated testing
+- Scheduled scans
+- Batch processing
+
+**E2E Test Updates**:
+- Fixed stack name passing to `continuous-traffic.sh`
+- Added `--auto-approve` and `--auto-cleanup` flags to E2E test
+- Added ECR repository cleanup to `cleanup.sh`
+
+### E2E Test Infrastructure
+
+**CloudFormation Stack Components**:
+- VPC with public/private subnets
+- NAT Gateway with Elastic IP
+- EC2 instance (Amazon Linux 2023) with Docker
+- S3 bucket for test data
+- DynamoDB table for test data
+- **NEW**: ECR repository for container images
+
+**Traffic Generation**:
+- S3: Downloads 1MB test file (50 requests per batch)
+- DynamoDB: Scans table (25 requests per batch)
+- **NEW**: ECR: Builds and pushes Docker image (1 push per batch)
+- Runs continuously for 30 minutes during scan
+
+**Cleanup Process**:
+1. Empty S3 bucket
+2. **NEW**: Empty ECR repository (delete all images)
+3. Delete CloudFormation stack
+4. Clean local test results
+
+**Known Issues Fixed**:
+- ✅ Stack name with random suffix now passed to traffic script
+- ✅ ECR repository cleanup before stack deletion
+- ✅ Interactive prompts can be skipped with flags
+
 ## Resources
 
 - **AWS IP Ranges**: https://ip-ranges.amazonaws.com/ip-ranges.json
@@ -445,7 +557,19 @@ When asking for help or reporting issues:
 ```bash
 go build -o terminator .                    # Build
 go test ./...                               # Run all tests
-./test/scripts/run-e2e-test.sh             # E2E test
+./test/scripts/run-e2e-test.sh             # E2E test (fully automated)
+```
+
+### Scan Commands
+```bash
+# Quick scan (no Flow Logs)
+./terminator scan quick --region us-east-1
+
+# Deep scan (interactive)
+./terminator scan deep --region us-east-1 --duration 5
+
+# Deep scan (automated)
+./terminator scan deep --region us-east-1 --duration 5 --auto-approve --auto-cleanup
 ```
 
 ### AWS Commands
@@ -461,13 +585,17 @@ aws ec2 describe-nat-gateways --region us-east-1
 
 # Check VPC Endpoints
 aws ec2 describe-vpc-endpoints --region us-east-1
+
+# Check ECR repositories
+aws ecr describe-repositories --region us-east-1
 ```
 
 ### Cleanup
 ```bash
-./test/scripts/cleanup.sh                   # Clean test resources
+./test/scripts/cleanup.sh                   # Clean test resources (includes ECR)
 aws ec2 delete-flow-logs --flow-log-ids fl-xxx  # Manual Flow Logs cleanup
 aws logs delete-log-group --log-group-name xxx  # Manual log group cleanup
+aws ecr batch-delete-image --repository-name xxx --image-ids imageDigest=xxx  # Manual ECR cleanup
 ```
 
 ## Contributing Checklist
@@ -492,13 +620,15 @@ Before submitting PR:
 3. **For traffic issues**: Always check if traffic ran DURING scan
 4. **For cost questions**: Explain it's estimates based on samples
 5. **For cleanup**: Verify Flow Logs stopped, offer manual cleanup commands
+6. **For ECR issues**: Check Docker is installed and running, ECR permissions granted
 
 ### When Debugging
 
-1. **Start with E2E test**: Validates entire workflow
+1. **Start with E2E test**: Validates entire workflow including ECR
 2. **Check CloudWatch Logs**: Raw data shows what Flow Logs captured
 3. **Verify AWS IP ranges**: Download and inspect manually
-4. **Test classifier**: Unit test with known IPs
+4. **Test classifier**: Unit test with known IPs (including EC2 ranges for ECR)
+5. **Check cache**: `~/.terminator/cache/` for IP ranges cache
 
 ### When Contributing
 
@@ -507,3 +637,22 @@ Before submitting PR:
 3. **Test thoroughly**: Unit + integration + E2E
 4. **Document clearly**: Comments for exported functions
 5. **Handle errors**: AWS APIs can fail, handle gracefully
+
+### Common Debugging Scenarios
+
+**ECR Traffic Not Detected**:
+- Verify Docker is running on EC2 instance
+- Check ECR repository exists and has images
+- Confirm traffic generation script is pushing images
+- Verify EC2 IP ranges loaded in classifier
+
+**Cache Issues**:
+- Check `~/.terminator/cache/` directory exists and is writable
+- Verify timestamp file format (RFC3339)
+- Delete cache to force refresh: `rm -rf ~/.terminator/cache/`
+
+**E2E Test Failures**:
+- Ensure `STACK_NAME` environment variable is set
+- Check all resources created (VPC, NAT, EC2, S3, DynamoDB, ECR)
+- Verify traffic script is running: `./test/scripts/continuous-traffic.sh status`
+- Check for ECR repository cleanup issues

@@ -23,8 +23,12 @@ start_traffic() {
         --stack-name "$STACK_NAME" --region "$REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`TestTableName`].OutputValue' --output text)
     
+    REPO=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" --region "$REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`TestRepositoryUri`].OutputValue' --output text)
+    
     # Run traffic generation for 30 minutes (longer than any scan)
-    COMMAND="/home/ec2-user/generate-traffic.sh 30 50 25 $BUCKET $TABLE"
+    COMMAND="/home/ec2-user/generate-traffic.sh 30 50 25 $BUCKET $TABLE $REPO"
     
     COMMAND_ID=$(aws ssm send-command \
         --instance-ids "$INSTANCE_ID" \

@@ -35,10 +35,15 @@ echo ""
 
 # Step 1: Deploy infrastructure
 echo "📦 Step 1/7: Deploying test infrastructure..."
-echo "   This creates: VPC, NAT Gateway, EC2, S3, DynamoDB"
+echo "   This creates: VPC, NAT Gateway, EC2, S3, DynamoDB, ECR"
 echo "   Estimated time: 3-4 minutes"
 echo ""
 ./test/scripts/deploy-test-infra.sh
+
+# Extract stack name from outputs
+STACK_NAME=$(jq -r '.[] | select(.OutputKey=="VPCId") | .ExportName' test/results/stack-outputs.json | sed 's/-vpc-id$//')
+export STACK_NAME
+echo "Stack name: $STACK_NAME"
 echo ""
 
 # Step 2: Build binary
@@ -56,7 +61,7 @@ echo ""
 
 # Step 4: Start traffic generation
 echo "🚦 Step 4/7: Starting continuous traffic generation..."
-echo "   This generates S3, DynamoDB, and other traffic through NAT Gateway"
+echo "   This generates S3, DynamoDB, and ECR traffic through NAT Gateway"
 ./test/scripts/continuous-traffic.sh start
 echo ""
 
@@ -70,7 +75,7 @@ echo "   - 5 min: Traffic collection"
 echo "   - 1 min: Analysis"
 echo "   Total: ~11 minutes"
 echo ""
-echo "   You'll be prompted to approve resource creation..."
+./terminator scan deep --region "$REGION" --duration 5 --auto-approve --auto-cleanup
 echo ""
 
 # Run scan (will prompt for approval)

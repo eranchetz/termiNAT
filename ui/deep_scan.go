@@ -45,6 +45,8 @@ type deepScanModel struct {
 	ctx              context.Context
 	duration         int
 	natIDs           []string
+	autoApprove      bool
+	autoCleanup      bool
 	spinner          spinner.Model
 	phase            phase
 	step             string
@@ -78,7 +80,7 @@ type flowLogsStoppedMsg struct{}
 type deepScanErrorMsg struct{ err error }
 type deepScanCompleteMsg struct{}
 
-func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string) error {
+func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, autoApprove, autoCleanup bool) error {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4"))
@@ -88,6 +90,8 @@ func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, dura
 		ctx:          ctx,
 		duration:     duration,
 		natIDs:       natIDs,
+		autoApprove:  autoApprove,
+		autoCleanup:  autoCleanup,
 		spinner:      s,
 		phase:        phaseInit,
 		region:       region,
@@ -182,6 +186,10 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case deepNatsDiscoveredMsg:
 		m.nats = msg.nats
+		if m.autoApprove {
+			m.phase = phaseCreatingResources
+			return m, m.createFlowLogs
+		}
 		m.phase = phaseAwaitingApproval
 		return m, nil
 
@@ -203,6 +211,14 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case flowLogsStoppedMsg:
 		m.flowLogsStopped = true
+		if m.autoApprove {
+			if m.autoCleanup {
+				return m, m.deleteLogGroup
+			}
+			m.done = true
+			m.phase = phaseDone
+			return m, tea.Quit
+		}
 		m.phase = phaseShowingResults
 		return m, nil
 
@@ -342,8 +358,10 @@ func (m *deepScanModel) renderResults() string {
 			m.trafficStats.TotalRecords, float64(m.trafficStats.TotalBytes)/(1024*1024)))
 		b.WriteString(fmt.Sprintf("  S3:       %.2f MB (%.1f%%)\n",
 			float64(m.trafficStats.S3Bytes)/(1024*1024), m.trafficStats.S3Percentage()))
-		b.WriteString(fmt.Sprintf("  DynamoDB: %.2f MB (%.1f%%)\n\n",
+		b.WriteString(fmt.Sprintf("  DynamoDB: %.2f MB (%.1f%%)\n",
 			float64(m.trafficStats.DynamoBytes)/(1024*1024), m.trafficStats.DynamoPercentage()))
+		b.WriteString(fmt.Sprintf("  ECR:      %.2f MB (%.1f%%)\n\n",
+			float64(m.trafficStats.ECRBytes)/(1024*1024), m.trafficStats.ECRPercentage()))
 	} else {
 		b.WriteString(warningStyle.Render("No traffic data collected during the scan period.\n\n"))
 	}
@@ -437,6 +455,8 @@ func (m *deepScanModel) renderFinalReport() string {
 			float64(m.trafficStats.S3Bytes)/(1024*1024), m.trafficStats.S3Percentage()))
 		b.WriteString(fmt.Sprintf("  %-12s %9.2f MB %9.1f%%\n", "DynamoDB",
 			float64(m.trafficStats.DynamoBytes)/(1024*1024), m.trafficStats.DynamoPercentage()))
+		b.WriteString(fmt.Sprintf("  %-12s %9.2f MB %9.1f%%\n", "ECR",
+			float64(m.trafficStats.ECRBytes)/(1024*1024), m.trafficStats.ECRPercentage()))
 		b.WriteString(fmt.Sprintf("  %-12s %9.2f MB %9.1f%%\n\n", "Other",
 			float64(m.trafficStats.OtherBytes)/(1024*1024), m.trafficStats.OtherPercentage()))
 

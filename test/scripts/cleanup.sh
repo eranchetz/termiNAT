@@ -48,6 +48,35 @@ else
 fi
 
 echo ""
+
+# Get ECR repository name and empty it
+echo -e "${YELLOW}Emptying ECR repository...${NC}"
+REPO_URI=$(aws cloudformation describe-stacks \
+    --stack-name "$STACK_NAME" \
+    --region "$REGION" \
+    --query 'Stacks[0].Outputs[?OutputKey==`TestRepositoryUri`].OutputValue' \
+    --output text 2>/dev/null || echo "")
+
+if [ -n "$REPO_URI" ]; then
+    REPO_NAME=$(echo "$REPO_URI" | cut -d'/' -f2)
+    echo "Repository: $REPO_NAME"
+    
+    # Delete all images
+    IMAGE_IDS=$(aws ecr list-images --repository-name "$REPO_NAME" --region "$REGION" --query 'imageIds[*]' --output json 2>/dev/null || echo "[]")
+    if [ "$IMAGE_IDS" != "[]" ] && [ -n "$IMAGE_IDS" ]; then
+        aws ecr batch-delete-image \
+            --repository-name "$REPO_NAME" \
+            --region "$REGION" \
+            --image-ids "$IMAGE_IDS" >/dev/null 2>&1 || true
+        echo -e "${GREEN}Repository emptied${NC}"
+    else
+        echo "Repository already empty"
+    fi
+else
+    echo "No repository found or already deleted"
+fi
+
+echo ""
 echo -e "${YELLOW}Deleting stack...${NC}"
 
 # Delete stack
