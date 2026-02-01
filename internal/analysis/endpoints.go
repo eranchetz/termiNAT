@@ -9,13 +9,24 @@ import (
 
 // EndpointAnalysis contains VPC endpoint configuration analysis
 type EndpointAnalysis struct {
-	VPCID            string
-	Region           string
-	S3Endpoint       *types.VPCEndpoint
-	DynamoEndpoint   *types.VPCEndpoint
-	RouteTables      []types.RouteTable
-	MissingEndpoints []string
-	MissingRoutes    []MissingRoute
+	VPCID              string
+	Region             string
+	S3Endpoint         *types.VPCEndpoint
+	DynamoEndpoint     *types.VPCEndpoint
+	InterfaceEndpoints []types.VPCEndpoint
+	RouteTables        []types.RouteTable
+	MissingEndpoints   []string
+	MissingRoutes      []MissingRoute
+}
+
+// InterfaceEndpointCost represents the cost of an interface endpoint
+type InterfaceEndpointCost struct {
+	Endpoint       types.VPCEndpoint
+	HourlyCost     float64 // $0.01/hour per AZ
+	MonthlyCost    float64
+	AZCount        int
+	ServiceName    string
+	IsLikelyUnused bool // Based on heuristics
 }
 
 // MissingRoute represents a route table missing VPC endpoint route
@@ -45,6 +56,10 @@ func AnalyzeEndpoints(region string, vpcID string, endpoints []types.VPCEndpoint
 		}
 		if strings.Contains(ep.ServiceName, ".dynamodb") && ep.Type == "Gateway" {
 			analysis.DynamoEndpoint = ep
+		}
+		// Collect Interface endpoints
+		if ep.Type == "Interface" {
+			analysis.InterfaceEndpoints = append(analysis.InterfaceEndpoints, *ep)
 		}
 	}
 
@@ -201,4 +216,49 @@ func (a *EndpointAnalysis) GetAddRouteCommands() []string {
 	}
 
 	return commands
+}
+
+// GetInterfaceEndpointCosts calculates costs for all Interface endpoints
+// Interface endpoints cost $0.01/hour per AZ + $0.01/GB data processed
+func (a *EndpointAnalysis) GetInterfaceEndpointCosts() []InterfaceEndpointCost {
+	var costs []InterfaceEndpointCost
+
+	for _, ep := range a.InterfaceEndpoints {
+		// Extract service name from full service name
+		// e.g., "com.amazonaws.us-east-1.ec2" -> "ec2"
+		parts := strings.Split(ep.ServiceName, ".")
+		serviceName := parts[len(parts)-1]
+
+		// Assume 1 AZ per endpoint (conservative estimate)
+		// In reality, we'd need to check subnet associations
+		azCount := 1
+
+		hourlyCost := 0.01 * float64(azCount)
+		monthlyCost := hourlyCost * 24 * 30
+
+		costs = append(costs, InterfaceEndpointCost{
+			Endpoint:    ep,
+			HourlyCost:  hourlyCost,
+			MonthlyCost: monthlyCost,
+			AZCount:     azCount,
+			ServiceName: serviceName,
+		})
+	}
+
+	return costs
+}
+
+// GetTotalInterfaceEndpointMonthlyCost returns total monthly cost of all Interface endpoints
+func (a *EndpointAnalysis) GetTotalInterfaceEndpointMonthlyCost() float64 {
+	costs := a.GetInterfaceEndpointCosts()
+	total := 0.0
+	for _, c := range costs {
+		total += c.MonthlyCost
+	}
+	return total
+}
+
+// HasInterfaceEndpoints returns true if there are Interface endpoints
+func (a *EndpointAnalysis) HasInterfaceEndpoints() bool {
+	return len(a.InterfaceEndpoints) > 0
 }

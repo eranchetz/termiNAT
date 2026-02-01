@@ -446,6 +446,24 @@ func (m *deepScanModel) renderFinalReport() string {
 			}
 			b.WriteString("\n")
 		}
+
+		// Interface Endpoints
+		if m.endpointAnalysis.HasInterfaceEndpoints() {
+			b.WriteString(stepStyle.Render("Interface Endpoints:\n"))
+			costs := m.endpointAnalysis.GetInterfaceEndpointCosts()
+			for _, c := range costs {
+				name := c.Endpoint.Tags["Name"]
+				if name == "" {
+					name = c.Endpoint.ID
+				}
+				b.WriteString(fmt.Sprintf("  • %s (%s): $%.2f/month\n", c.ServiceName, name, c.MonthlyCost))
+			}
+			totalCost := m.endpointAnalysis.GetTotalInterfaceEndpointMonthlyCost()
+			b.WriteString(fmt.Sprintf("\n  Total Interface Endpoint Cost: $%.2f/month\n", totalCost))
+			b.WriteString(infoStyle.Render("  💡 Interface endpoints cost $0.01/hour + $0.01/GB data processed\n"))
+			b.WriteString(infoStyle.Render("  💡 Review unused endpoints to reduce costs\n"))
+			b.WriteString("\n")
+		}
 	}
 
 	// Traffic Analysis
