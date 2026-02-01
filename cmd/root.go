@@ -7,9 +7,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const Version = "0.1.2"
+
 var rootCmd = &cobra.Command{
-	Use:   "terminator",
-	Short: "termiNATor - Terminate unnecessary NAT Gateway costs",
+	Use:     "terminator",
+	Short:   "termiNATor - Terminate unnecessary NAT Gateway costs",
+	Version: Version,
 	Long: `termiNATor helps AWS customers identify and quantify avoidable NAT Gateway 
 spend caused by workloads using NAT to reach AWS services when VPC endpoints 
 could be used instead.`,
