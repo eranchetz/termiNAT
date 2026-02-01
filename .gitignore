@@ -1,5 +1,6 @@
 # Binaries
 terminator
+terminat
 *.exe
 *.dll
 *.so

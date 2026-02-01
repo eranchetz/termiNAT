@@ -11,7 +11,7 @@ NC='\033[0m' # No Color
 SUFFIX=$(openssl rand -hex 2 | cut -c1-3)
 
 # Configuration
-STACK_NAME="${STACK_NAME:-terminator-test-${SUFFIX}}"
+STACK_NAME="${STACK_NAME:-terminat-test-${SUFFIX}}"
 REGION="${AWS_REGION:-us-east-1}"
 TEMPLATE_FILE="test/infrastructure/test-stack.yaml"
 

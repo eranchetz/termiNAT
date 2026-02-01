@@ -57,7 +57,7 @@ This creates a role with permissions for:
 Analyze your VPC configuration without creating any resources:
 
 ```bash
-./terminator scan quick --region us-east-1
+./terminat scan quick --region us-east-1
 ```
 
 **What it does:**
@@ -86,7 +86,7 @@ Recommendations:
 Analyze real traffic patterns to calculate actual savings:
 
 ```bash
-./terminator scan deep --region us-east-1 --duration 5
+./terminat scan deep --region us-east-1 --duration 5
 ```
 
 **What it does:**
@@ -198,23 +198,23 @@ aws ec2 create-vpc-endpoint \
 ### Scan Specific NAT Gateway
 
 ```bash
-./terminator scan deep --region us-east-1 --nat-id nat-1234567890abcdef0 --duration 5
+./terminat scan deep --region us-east-1 --nat-id nat-1234567890abcdef0 --duration 5
 ```
 
 ### Longer Collection Period (More Accurate)
 
 ```bash
 # 30-minute collection for better traffic sampling
-./terminator scan deep --region us-east-1 --duration 30
+./terminat scan deep --region us-east-1 --duration 30
 ```
 
 ### Multiple Regions
 
 ```bash
 # Scan each region separately
-./terminator scan quick --region us-east-1
-./terminator scan quick --region us-west-2
-./terminator scan quick --region eu-west-1
+./terminat scan quick --region us-east-1
+./terminat scan quick --region us-west-2
+./terminat scan quick --region eu-west-1
 ```
 
 ## Best Practices
@@ -235,13 +235,13 @@ aws ec2 create-vpc-endpoint \
 Run scans at different times to understand traffic patterns:
 ```bash
 # Morning traffic
-./terminator scan deep --region us-east-1 --duration 15
+./terminat scan deep --region us-east-1 --duration 15
 
 # Afternoon traffic
-./terminator scan deep --region us-east-1 --duration 15
+./terminat scan deep --region us-east-1 --duration 15
 
 # Evening traffic
-./terminator scan deep --region us-east-1 --duration 15
+./terminat scan deep --region us-east-1 --duration 15
 ```
 
 ### 4. Cleanup
@@ -272,7 +272,7 @@ Delete CloudWatch Log Group? [Y/n]
 aws ec2 describe-nat-gateways --region us-east-1
 
 # Check you're scanning the correct region
-./terminator scan quick --region <your-region>
+./terminat scan quick --region <your-region>
 ```
 
 ### "Failed to create Flow Logs"
@@ -296,7 +296,7 @@ aws iam get-role --role-name termiNATor-FlowLogsRole
 ```bash
 # Ensure applications are actively using NAT Gateway
 # Run a longer collection period
-./terminator scan deep --region us-east-1 --duration 30
+./terminat scan deep --region us-east-1 --duration 30
 ```
 
 ### "Cost estimates seem incorrect"

@@ -34,10 +34,10 @@ export AWS_PROFILE=your-profile
 export AWS_REGION=us-east-1
 
 # Run quick scan (instant, no resources created)
-./terminator scan quick --region us-east-1
+./terminat scan quick --region us-east-1
 
 # Run deep dive scan (analyzes actual traffic, ~10 minutes)
-./terminator scan deep --region us-east-1 --duration 5
+./terminat scan deep --region us-east-1 --duration 5
 ```
 
 📖 **[Complete Usage Guide](USAGE.md)** - Detailed instructions for production use  
@@ -118,7 +118,7 @@ This creates a role with permissions for:
 Instantly analyze your VPC configuration:
 
 ```bash
-terminator scan quick --region us-east-1
+terminat scan quick --region us-east-1
 ```
 
 This will:
@@ -132,7 +132,7 @@ This will:
 Analyze actual traffic patterns:
 
 ```bash
-terminator scan deep --region us-east-1 --duration 5
+terminat scan deep --region us-east-1 --duration 5
 ```
 
 This will:
@@ -166,13 +166,13 @@ Cost Savings Estimate:
 
 ```bash
 # Quick scan
-terminator scan quick --region <region>
+terminat scan quick --region <region>
 
 # Deep dive scan
-terminator scan deep --region <region> --duration <minutes>
+terminat scan deep --region <region> --duration <minutes>
 
 # Scan specific NAT Gateway
-terminator scan deep --region us-east-1 --nat-id nat-1234567890abcdef0
+terminat scan deep --region us-east-1 --nat-id nat-1234567890abcdef0
 ```
 
 ### Cleanup Commands
@@ -302,7 +302,7 @@ For issues and questions:
 
 ## Roadmap
 
-- [ ] Support for Interface VPC Endpoints cost analysis
+- [x] Support for Interface VPC Endpoints cost analysis
 - [ ] Historical cost analysis from CloudWatch metrics
 - [ ] Automated VPC endpoint creation
 - [ ] Multi-account scanning

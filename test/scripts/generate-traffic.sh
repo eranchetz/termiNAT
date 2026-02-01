@@ -11,7 +11,7 @@ NC='\033[0m' # No Color
 if [ -f "test/results/stack-name.txt" ]; then
     STACK_NAME=$(cat test/results/stack-name.txt)
 else
-    STACK_NAME="${STACK_NAME:-terminator-test-infra}"
+    STACK_NAME="${STACK_NAME:-terminat-test-infra}"
 fi
 REGION="${AWS_REGION:-us-east-1}"
 DURATION="${DURATION:-5}"

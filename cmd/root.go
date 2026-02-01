@@ -10,7 +10,7 @@ import (
 const Version = "0.2.0"
 
 var rootCmd = &cobra.Command{
-	Use:     "terminator",
+	Use:     "terminat",
 	Short:   "termiNATor - Terminate unnecessary NAT Gateway costs",
 	Version: Version,
 	Long: `termiNATor helps AWS customers identify and quantify avoidable NAT Gateway 

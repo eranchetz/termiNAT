@@ -80,7 +80,7 @@ Test Instance ID: i-00a5a75dc7db5e9b2
 go build -o terminator .
 
 # Verify it works
-./terminator --help
+./terminat --help
 ```
 
 ### Step 4: Start Continuous Traffic Generation
@@ -102,7 +102,7 @@ go build -o terminator .
 
 ```bash
 # Run 5-minute scan (10 minutes total with startup)
-./terminator scan deep --region $AWS_REGION --duration 5
+./terminat scan deep --region $AWS_REGION --duration 5
 ```
 
 **What happens:**
@@ -343,7 +343,7 @@ echo "🔍 Step 5/7: Running deep dive scan (10 minutes)..."
 echo "   - 5 min: Flow Logs initialization"
 echo "   - 5 min: Traffic collection"
 echo ""
-echo "y" | ./terminator scan deep --region $AWS_REGION --duration 5
+echo "y" | ./terminat scan deep --region $AWS_REGION --duration 5
 echo ""
 
 # Step 6: Stop traffic

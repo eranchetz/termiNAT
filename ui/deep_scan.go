@@ -100,8 +100,8 @@ func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, dura
 		phase:        phaseInit,
 		region:       region,
 		accountID:    scanner.GetAccountID(),
-		runID:        fmt.Sprintf("terminator-%d", time.Now().Unix()),
-		logGroupName: fmt.Sprintf("/aws/vpc/flowlogs/terminator-%d", time.Now().Unix()),
+		runID:        fmt.Sprintf("terminat-%d", time.Now().Unix()),
+		logGroupName: fmt.Sprintf("/aws/vpc/flowlogs/terminat-%d", time.Now().Unix()),
 		startTime:    time.Now(),
 	}
 

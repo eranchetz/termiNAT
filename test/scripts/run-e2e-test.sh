@@ -6,9 +6,9 @@ echo "================================"
 echo ""
 
 # Check prerequisites
-if [ -z "$AWS_PROFILE" ]; then
-    echo "❌ Error: AWS_PROFILE environment variable not set"
-    echo "   Set it with: export AWS_PROFILE=your-profile-name"
+if [ -z "$AWS_PROFILE" ] && [ -z "$AWS_ACCESS_KEY_ID" ]; then
+    echo "❌ Error: No AWS credentials configured"
+    echo "   Set AWS_PROFILE or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY"
     exit 1
 fi
 
@@ -18,18 +18,22 @@ if [ -z "$AWS_REGION" ]; then
     exit 1
 fi
 
-echo "✓ AWS Profile: $AWS_PROFILE"
 echo "✓ AWS Region: $AWS_REGION"
+if [ -n "$AWS_PROFILE" ]; then
+    echo "✓ AWS Profile: $AWS_PROFILE"
+fi
 echo ""
 
 # Verify AWS access
 echo "🔐 Verifying AWS access..."
-if ! aws sts get-caller-identity --profile $AWS_PROFILE > /dev/null 2>&1; then
-    echo "❌ Error: Cannot access AWS with profile $AWS_PROFILE"
-    echo "   Run: aws sso login --profile $AWS_PROFILE"
+if ! aws sts get-caller-identity > /dev/null 2>&1; then
+    echo "❌ Error: Cannot access AWS"
+    if [ -n "$AWS_PROFILE" ]; then
+        echo "   Run: aws sso login --profile $AWS_PROFILE"
+    fi
     exit 1
 fi
-ACCOUNT_ID=$(aws sts get-caller-identity --profile $AWS_PROFILE --query Account --output text)
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo "✓ AWS Account: $ACCOUNT_ID"
 echo ""
 
@@ -40,8 +44,8 @@ echo "   Estimated time: 3-4 minutes"
 echo ""
 ./test/scripts/deploy-test-infra.sh
 
-# Extract stack name from outputs
-STACK_NAME=$(jq -r '.[] | select(.OutputKey=="VPCId") | .ExportName' test/results/stack-outputs.json | sed 's/-vpc-id$//')
+# Get stack name from saved file
+STACK_NAME=$(cat test/results/stack-name.txt)
 export STACK_NAME
 echo "Stack name: $STACK_NAME"
 echo ""
@@ -75,12 +79,14 @@ echo "   - 5 min: Traffic collection"
 echo "   - 1 min: Analysis"
 echo "   Total: ~11 minutes"
 echo ""
-./terminator scan deep --region "$REGION" --duration 5 --auto-approve --auto-cleanup
-echo ""
 
-# Run scan (will prompt for approval)
-./terminator scan deep --region $AWS_REGION --duration 5
+# Build scan command with optional profile
+SCAN_CMD="./terminat scan deep --region $AWS_REGION --duration 5 --auto-approve --auto-cleanup"
+if [ -n "$AWS_PROFILE" ]; then
+    SCAN_CMD="$SCAN_CMD --profile $AWS_PROFILE"
+fi
 
+$SCAN_CMD
 echo ""
 
 # Step 6: Stop traffic
@@ -90,7 +96,7 @@ echo ""
 
 # Step 7: Cleanup
 echo "🧹 Step 7/7: Cleaning up test infrastructure..."
-echo "   This deletes: CloudFormation stack, S3 bucket, DynamoDB table, Flow Logs"
+echo "   This deletes: CloudFormation stack, S3 bucket, ECR images"
 echo "   Estimated time: 2-3 minutes"
 echo ""
 ./test/scripts/cleanup.sh
@@ -102,9 +108,11 @@ echo ""
 echo "Verification Checklist:"
 echo "  [ ] Traffic classification showed S3 traffic (>0%)"
 echo "  [ ] Traffic classification showed DynamoDB traffic (>0%)"
-echo "  [ ] VPC endpoint analysis detected 2 missing endpoints"
+echo "  [ ] Traffic classification showed ECR traffic (>0%)"
+echo "  [ ] VPC endpoint analysis detected missing Gateway endpoints"
+echo "  [ ] Interface endpoints were listed with costs"
 echo "  [ ] Remediation commands were generated"
-echo "  [ ] Source IPs were tracked and displayed"
+echo "  [ ] Regional NAT Gateway recommendations shown (if applicable)"
 echo "  [ ] Cost estimates were calculated"
 echo "  [ ] Flow Logs were stopped automatically"
 echo "  [ ] All resources were cleaned up"
