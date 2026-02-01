@@ -15,6 +15,10 @@ STACK_NAME="${STACK_NAME:-terminator-test-${SUFFIX}}"
 REGION="${AWS_REGION:-us-east-1}"
 TEMPLATE_FILE="test/infrastructure/test-stack.yaml"
 
+# Save stack name for other scripts
+mkdir -p test/results
+echo "$STACK_NAME" > test/results/stack-name.txt
+
 echo -e "${GREEN}=== termiNATor Test Infrastructure Deployment ===${NC}"
 echo "Stack Name: $STACK_NAME"
 echo "Region: $REGION"

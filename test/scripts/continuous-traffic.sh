@@ -4,7 +4,12 @@
 
 set -e
 
-STACK_NAME="${STACK_NAME:-terminator-test-infra}"
+# Get stack name from saved file or use default
+if [ -f "test/results/stack-name.txt" ]; then
+    STACK_NAME=$(cat test/results/stack-name.txt)
+else
+    STACK_NAME="${STACK_NAME:-terminator-test-infra}"
+fi
 REGION="${AWS_REGION:-us-east-1}"
 PID_FILE="/tmp/terminator-traffic-gen.pid"
 

@@ -7,8 +7,12 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Configuration
-STACK_NAME="${STACK_NAME:-terminator-test-infra}"
+# Configuration - get stack name from saved file or use default
+if [ -f "test/results/stack-name.txt" ]; then
+    STACK_NAME=$(cat test/results/stack-name.txt)
+else
+    STACK_NAME="${STACK_NAME:-terminator-test-infra}"
+fi
 REGION="${AWS_REGION:-us-east-1}"
 DURATION="${DURATION:-5}"
 S3_REQUESTS="${S3_REQUESTS:-100}"

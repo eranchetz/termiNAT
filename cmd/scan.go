@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/doitintl/terminator/internal/core"
 	"github.com/doitintl/terminator/ui"
@@ -43,9 +44,8 @@ func init() {
 	scanCmd.AddCommand(quickCmd)
 	scanCmd.AddCommand(deepCmd)
 
-	// Common flags
-	scanCmd.PersistentFlags().StringVarP(&region, "region", "r", "", "AWS region (required)")
-	scanCmd.MarkPersistentFlagRequired("region")
+	// Common flags - region is optional if AWS_REGION is set
+	scanCmd.PersistentFlags().StringVarP(&region, "region", "r", "", "AWS region (uses AWS_REGION env var if not specified)")
 
 	// Deep scan specific flags
 	deepCmd.Flags().IntVarP(&duration, "duration", "d", 15, "Flow Log collection duration in minutes (max 60)")
@@ -54,11 +54,31 @@ func init() {
 	deepCmd.Flags().BoolVar(&autoCleanup, "auto-cleanup", false, "Automatically delete log groups after scan")
 }
 
+func getRegion() (string, error) {
+	// Use flag value if provided
+	if region != "" {
+		return region, nil
+	}
+	
+	// Fall back to AWS_REGION environment variable
+	if envRegion := os.Getenv("AWS_REGION"); envRegion != "" {
+		return envRegion, nil
+	}
+	
+	return "", fmt.Errorf("region not specified: use --region flag or set AWS_REGION environment variable")
+}
+
 func runQuickScan(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
+	// Get region from flag or environment
+	selectedRegion, err := getRegion()
+	if err != nil {
+		return err
+	}
+
 	// Create scanner
-	scanner, err := core.NewScanner(ctx, region)
+	scanner, err := core.NewScanner(ctx, selectedRegion)
 	if err != nil {
 		return fmt.Errorf("failed to create scanner: %w", err)
 	}
@@ -75,12 +95,18 @@ func runDeepScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("duration must be between 5 and 60 minutes")
 	}
 
+	// Get region from flag or environment
+	selectedRegion, err := getRegion()
+	if err != nil {
+		return err
+	}
+
 	// Create scanner
-	scanner, err := core.NewScanner(ctx, region)
+	scanner, err := core.NewScanner(ctx, selectedRegion)
 	if err != nil {
 		return fmt.Errorf("failed to create scanner: %w", err)
 	}
 
 	// Run deep scan with UI
-	return ui.RunDeepScan(ctx, scanner, region, duration, natIDs, autoApprove, autoCleanup)
+	return ui.RunDeepScan(ctx, scanner, selectedRegion, duration, natIDs, autoApprove, autoCleanup)
 }
