@@ -36,7 +36,7 @@ func (c *EC2Client) DiscoverNATGateways(ctx context.Context) ([]pkgtypes.NATGate
 		}
 
 		// Skip NAT gateways with missing required fields
-		if nat.NatGatewayId == nil || nat.VpcId == nil || nat.SubnetId == nil {
+		if nat.NatGatewayId == nil || nat.VpcId == nil {
 			continue
 		}
 
@@ -47,27 +47,40 @@ func (c *EC2Client) DiscoverNATGateways(ctx context.Context) ([]pkgtypes.NATGate
 			}
 		}
 
+		// Determine availability mode from API response
+		availabilityMode := "zonal" // default
+		if nat.AvailabilityMode != "" {
+			availabilityMode = string(nat.AvailabilityMode)
+		}
+
 		natGW := pkgtypes.NATGateway{
 			ID:               *nat.NatGatewayId,
 			VPCID:            *nat.VpcId,
-			SubnetID:         *nat.SubnetId,
 			State:            string(nat.State),
 			ConnectivityType: string(nat.ConnectivityType),
+			AvailabilityMode: availabilityMode,
 			Tags:             tags,
 		}
 
-		// Determine availability mode and network interface
-		if len(nat.NatGatewayAddresses) > 0 {
-			if nat.NatGatewayAddresses[0].NetworkInterfaceId != nil {
-				natGW.NetworkInterfaceID = *nat.NatGatewayAddresses[0].NetworkInterfaceId
+		// For zonal NAT gateways, SubnetID is required
+		// For regional NAT gateways, SubnetID may be nil
+		if availabilityMode == "zonal" {
+			if nat.SubnetId == nil {
+				continue // Skip zonal NAT without subnet
 			}
-		}
+			natGW.SubnetID = *nat.SubnetId
 
-		// Check if regional NAT (has multiple addresses across AZs)
-		if len(nat.NatGatewayAddresses) > 1 {
-			natGW.AvailabilityMode = "regional"
+			// Get network interface for zonal NAT
+			if len(nat.NatGatewayAddresses) > 0 {
+				if nat.NatGatewayAddresses[0].NetworkInterfaceId != nil {
+					natGW.NetworkInterfaceID = *nat.NatGatewayAddresses[0].NetworkInterfaceId
+				}
+			}
 		} else {
-			natGW.AvailabilityMode = "zonal"
+			// Regional NAT: SubnetID is optional
+			if nat.SubnetId != nil {
+				natGW.SubnetID = *nat.SubnetId
+			}
 		}
 
 		nats = append(nats, natGW)

@@ -57,6 +57,7 @@ type deepScanModel struct {
 	trafficStats     *analysis.TrafficStats
 	costEstimate     *analysis.CostEstimate
 	endpointAnalysis *analysis.EndpointAnalysis
+	recommendations  []analysis.Recommendation
 	region           string
 	accountID        string
 	err              error
@@ -68,7 +69,10 @@ type deepScanModel struct {
 }
 
 type tickMsg time.Time
-type deepNatsDiscoveredMsg struct{ nats []types.NATGateway }
+type deepNatsDiscoveredMsg struct {
+	nats            []types.NATGateway
+	recommendations []analysis.Recommendation
+}
 type flowLogsCreatedMsg struct{ flowLogIDs []string }
 type collectionCompleteMsg struct{}
 type trafficAnalyzedMsg struct {
@@ -186,6 +190,7 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case deepNatsDiscoveredMsg:
 		m.nats = msg.nats
+		m.recommendations = msg.recommendations
 		if m.autoApprove {
 			m.phase = phaseCreatingResources
 			return m, m.createFlowLogs
@@ -278,7 +283,11 @@ func (m *deepScanModel) renderApprovalPrompt() string {
 
 	b.WriteString(stepStyle.Render("1. VPC Flow Logs (temporary)\n"))
 	for _, nat := range m.nats {
-		b.WriteString(fmt.Sprintf("   • NAT Gateway: %s (VPC: %s)\n", nat.ID, nat.VPCID))
+		mode := nat.AvailabilityMode
+		if mode == "" {
+			mode = "zonal"
+		}
+		b.WriteString(fmt.Sprintf("   • NAT Gateway: %s (%s, VPC: %s)\n", nat.ID, mode, nat.VPCID))
 	}
 	b.WriteString(infoStyle.Render("   → Flow Logs will be AUTOMATICALLY STOPPED after analysis\n"))
 
@@ -512,6 +521,46 @@ func (m *deepScanModel) renderFinalReport() string {
 		}
 	}
 
+	// Recommendations
+	if len(m.recommendations) > 0 {
+		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
+		b.WriteString(stepStyle.Render("                      RECOMMENDATIONS\n"))
+		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
+
+		for i, rec := range m.recommendations {
+			b.WriteString(highlightStyle.Render(fmt.Sprintf("%d. %s [%s priority]\n\n", i+1, rec.Title, strings.ToUpper(rec.Priority))))
+			b.WriteString(fmt.Sprintf("%s\n\n", rec.Description))
+
+			if len(rec.Benefits) > 0 {
+				b.WriteString(stepStyle.Render("Benefits:\n"))
+				for _, benefit := range rec.Benefits {
+					b.WriteString(fmt.Sprintf("  ✓ %s\n", benefit))
+				}
+				b.WriteString("\n")
+			}
+
+			if rec.Savings != "" {
+				b.WriteString(highlightStyle.Render(fmt.Sprintf("💰 %s\n\n", rec.Savings)))
+			}
+
+			if len(rec.Commands) > 0 {
+				b.WriteString(stepStyle.Render("How to implement:\n"))
+				for _, cmd := range rec.Commands {
+					if strings.HasPrefix(cmd, "#") {
+						b.WriteString(infoStyle.Render(fmt.Sprintf("%s\n", cmd)))
+					} else {
+						b.WriteString(fmt.Sprintf("%s\n", cmd))
+					}
+				}
+				b.WriteString("\n")
+			}
+
+			if i < len(m.recommendations)-1 {
+				b.WriteString(strings.Repeat("-", 63) + "\n\n")
+			}
+		}
+	}
+
 	b.WriteString(warningStyle.Render("⚠️  DISCLAIMERS:\n"))
 	b.WriteString("   • Cost estimates based on traffic sample collected\n")
 	b.WriteString("   • Actual costs may vary based on traffic patterns\n")
@@ -543,7 +592,11 @@ func (m *deepScanModel) discoverNATs() tea.Msg {
 	if len(nats) == 0 {
 		return deepScanErrorMsg{err: fmt.Errorf("no NAT gateways found")}
 	}
-	return deepNatsDiscoveredMsg{nats: nats}
+
+	// Generate recommendations based on NAT Gateway setup
+	recommendations := analysis.AnalyzeNATGatewaySetup(nats)
+
+	return deepNatsDiscoveredMsg{nats: nats, recommendations: recommendations}
 }
 
 func (m *deepScanModel) createFlowLogs() tea.Msg {
