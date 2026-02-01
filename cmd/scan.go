@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/doitintl/terminator/internal/core"
 	"github.com/doitintl/terminator/ui"
 	"github.com/spf13/cobra"
@@ -56,7 +57,7 @@ func init() {
 	deepCmd.Flags().BoolVar(&autoCleanup, "auto-cleanup", false, "Automatically delete log groups after scan")
 }
 
-func getRegion() (string, error) {
+func getRegion(profile string) (string, error) {
 	// Use flag value if provided
 	if region != "" {
 		return region, nil
@@ -65,6 +66,17 @@ func getRegion() (string, error) {
 	// Fall back to AWS_REGION environment variable
 	if envRegion := os.Getenv("AWS_REGION"); envRegion != "" {
 		return envRegion, nil
+	}
+
+	// Try to get region from AWS config for the profile
+	if profile != "" {
+		cfg, err := config.LoadDefaultConfig(context.Background(),
+			config.WithSharedConfigProfile(profile),
+		)
+		if err == nil && cfg.Region != "" {
+			fmt.Fprintf(os.Stderr, "ℹ️  Using region '%s' from profile '%s'\n", cfg.Region, profile)
+			return cfg.Region, nil
+		}
 	}
 
 	return "", fmt.Errorf("region not specified: use --region flag or set AWS_REGION environment variable")
@@ -107,14 +119,14 @@ func printAuthHelp(err error) {
 func runQuickScan(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	// Get region from flag or environment
-	selectedRegion, err := getRegion()
+	// Get profile from flag or environment (optional)
+	selectedProfile := getProfile()
+
+	// Get region from flag, environment, or profile config
+	selectedRegion, err := getRegion(selectedProfile)
 	if err != nil {
 		return err
 	}
-
-	// Get profile from flag or environment (optional)
-	selectedProfile := getProfile()
 
 	// Create scanner - this validates credentials
 	scanner, err := core.NewScanner(ctx, selectedRegion, selectedProfile)
@@ -135,14 +147,14 @@ func runDeepScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("duration must be between 5 and 60 minutes")
 	}
 
-	// Get region from flag or environment
-	selectedRegion, err := getRegion()
+	// Get profile from flag or environment (optional)
+	selectedProfile := getProfile()
+
+	// Get region from flag, environment, or profile config
+	selectedRegion, err := getRegion(selectedProfile)
 	if err != nil {
 		return err
 	}
-
-	// Get profile from flag or environment (optional)
-	selectedProfile := getProfile()
 
 	// Create scanner - this validates credentials
 	scanner, err := core.NewScanner(ctx, selectedRegion, selectedProfile)
