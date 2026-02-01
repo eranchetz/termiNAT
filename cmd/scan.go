@@ -12,6 +12,7 @@ import (
 
 var (
 	region      string
+	profile     string
 	duration    int
 	natIDs      []string
 	autoApprove bool
@@ -44,8 +45,9 @@ func init() {
 	scanCmd.AddCommand(quickCmd)
 	scanCmd.AddCommand(deepCmd)
 
-	// Common flags - region is optional if AWS_REGION is set
+	// Common flags
 	scanCmd.PersistentFlags().StringVarP(&region, "region", "r", "", "AWS region (uses AWS_REGION env var if not specified)")
+	scanCmd.PersistentFlags().StringVarP(&profile, "profile", "p", "", "AWS profile (uses AWS_PROFILE env var if not specified)")
 
 	// Deep scan specific flags
 	deepCmd.Flags().IntVarP(&duration, "duration", "d", 15, "Flow Log collection duration in minutes (max 60)")
@@ -68,6 +70,40 @@ func getRegion() (string, error) {
 	return "", fmt.Errorf("region not specified: use --region flag or set AWS_REGION environment variable")
 }
 
+func getProfile() string {
+	// Use flag value if provided
+	if profile != "" {
+		return profile
+	}
+
+	// Fall back to AWS_PROFILE environment variable
+	return os.Getenv("AWS_PROFILE")
+}
+
+func printAuthHelp(err error) {
+	fmt.Fprintf(os.Stderr, "\n❌ Authentication failed: %v\n\n", err)
+	fmt.Fprintln(os.Stderr, "🔐 AWS Authentication Guide:")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Option 1: AWS SSO")
+	fmt.Fprintln(os.Stderr, "  aws sso login --profile your-profile")
+	fmt.Fprintln(os.Stderr, "  terminator scan quick --region us-east-1 --profile your-profile")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Option 2: Environment Variables")
+	fmt.Fprintln(os.Stderr, "  export AWS_PROFILE=your-profile")
+	fmt.Fprintln(os.Stderr, "  export AWS_REGION=us-east-1")
+	fmt.Fprintln(os.Stderr, "  terminator scan quick")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Option 3: AWS Access Keys")
+	fmt.Fprintln(os.Stderr, "  export AWS_ACCESS_KEY_ID=your-key")
+	fmt.Fprintln(os.Stderr, "  export AWS_SECRET_ACCESS_KEY=your-secret")
+	fmt.Fprintln(os.Stderr, "  terminator scan quick --region us-east-1")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Option 4: AWS CLI Configuration")
+	fmt.Fprintln(os.Stderr, "  aws configure")
+	fmt.Fprintln(os.Stderr, "  terminator scan quick --region us-east-1")
+	fmt.Fprintln(os.Stderr, "")
+}
+
 func runQuickScan(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
@@ -77,10 +113,14 @@ func runQuickScan(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Create scanner
-	scanner, err := core.NewScanner(ctx, selectedRegion)
+	// Get profile from flag or environment (optional)
+	selectedProfile := getProfile()
+
+	// Create scanner - this validates credentials
+	scanner, err := core.NewScanner(ctx, selectedRegion, selectedProfile)
 	if err != nil {
-		return fmt.Errorf("failed to create scanner: %w", err)
+		printAuthHelp(err)
+		return fmt.Errorf("failed to create scanner")
 	}
 
 	// Run quick scan with UI
@@ -101,10 +141,14 @@ func runDeepScan(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Create scanner
-	scanner, err := core.NewScanner(ctx, selectedRegion)
+	// Get profile from flag or environment (optional)
+	selectedProfile := getProfile()
+
+	// Create scanner - this validates credentials
+	scanner, err := core.NewScanner(ctx, selectedRegion, selectedProfile)
 	if err != nil {
-		return fmt.Errorf("failed to create scanner: %w", err)
+		printAuthHelp(err)
+		return fmt.Errorf("failed to create scanner")
 	}
 
 	// Run deep scan with UI

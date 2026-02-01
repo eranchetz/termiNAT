@@ -40,8 +40,8 @@ func init() {
 func runCleanup(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	// Initialize scanner
-	scanner, err := core.NewScanner(ctx, cleanupRegion)
+	// Initialize scanner (no profile needed for cleanup)
+	scanner, err := core.NewScanner(ctx, cleanupRegion, "")
 	if err != nil {
 		return fmt.Errorf("failed to create scanner: %w", err)
 	}

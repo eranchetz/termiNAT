@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -22,17 +23,32 @@ type Scanner struct {
 }
 
 // NewScanner creates a new scanner instance
-func NewScanner(ctx context.Context, region string) (*Scanner, error) {
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+func NewScanner(ctx context.Context, region, profile string) (*Scanner, error) {
+	// Build config options with fast IMDS timeout
+	configOpts := []func(*config.LoadOptions) error{
+		config.WithRegion(region),
+		config.WithEC2IMDSClientEnableState(imds.ClientDisabled), // Disable IMDS for fast failure on non-EC2
+	}
+
+	// Add profile if specified
+	if profile != "" {
+		configOpts = append(configOpts, config.WithSharedConfigProfile(profile))
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx, configOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	// Get account ID
+	// Validate credentials by calling STS - this fails fast if not authenticated
 	stsClient := sts.NewFromConfig(cfg)
 	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return nil, fmt.Errorf("authentication failed: %w", err)
+	}
+
 	accountID := ""
-	if err == nil && identity.Account != nil {
+	if identity.Account != nil {
 		accountID = *identity.Account
 	}
 
