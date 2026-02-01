@@ -53,7 +53,9 @@ func (c *EC2Client) DiscoverNATGateways(ctx context.Context) ([]pkgtypes.NATGate
 
 		// Determine availability mode and network interface
 		if len(nat.NatGatewayAddresses) > 0 {
-			natGW.NetworkInterfaceID = *nat.NatGatewayAddresses[0].NetworkInterfaceId
+			if nat.NatGatewayAddresses[0].NetworkInterfaceId != nil {
+				natGW.NetworkInterfaceID = *nat.NatGatewayAddresses[0].NetworkInterfaceId
+			}
 		}
 
 		// Check if regional NAT (has multiple addresses across AZs)
