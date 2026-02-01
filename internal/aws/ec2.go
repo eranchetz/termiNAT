@@ -35,6 +35,11 @@ func (c *EC2Client) DiscoverNATGateways(ctx context.Context) ([]pkgtypes.NATGate
 			continue
 		}
 
+		// Skip NAT gateways with missing required fields
+		if nat.NatGatewayId == nil || nat.VpcId == nil || nat.SubnetId == nil {
+			continue
+		}
+
 		tags := make(map[string]string)
 		for _, tag := range nat.Tags {
 			if tag.Key != nil && tag.Value != nil {
