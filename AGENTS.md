@@ -72,13 +72,13 @@ export AWS_REGION=us-east-1
 
 ```bash
 # Build
-go build -o terminator .
+go build -o terminat .
 
 # Quick scan (instant)
-./terminator scan quick --region us-east-1
+./terminat scan quick --region us-east-1
 
 # Deep dive scan (10 minutes)
-./terminator scan deep --region us-east-1 --duration 5
+./terminat scan deep --region us-east-1 --duration 5
 ```
 
 ## E2E Testing
@@ -103,13 +103,13 @@ export AWS_REGION=us-east-1
 ./test/scripts/deploy-test-infra.sh
 
 # 2. Build
-go build -o terminator .
+go build -o terminat .
 
 # 3. Start traffic (MUST run during scan, not before)
 ./test/scripts/continuous-traffic.sh start
 
 # 4. Run scan
-./terminator scan deep --region us-east-1 --duration 5
+./terminat scan deep --region us-east-1 --duration 5
 
 # 5. Stop traffic
 ./test/scripts/continuous-traffic.sh stop
@@ -482,7 +482,7 @@ Potential areas for contribution:
 
 **Added Flags for Non-Interactive Mode**:
 ```bash
-./terminator scan deep --region us-east-1 --duration 5 \
+./terminat scan deep --region us-east-1 --duration 5 \
   --auto-approve \    # Skip approval prompts
   --auto-cleanup      # Automatically delete log groups
 ```
@@ -555,7 +555,7 @@ When asking for help or reporting issues:
 
 ### Build & Test
 ```bash
-go build -o terminator .                    # Build
+go build -o terminat .                    # Build
 go test ./...                               # Run all tests
 ./test/scripts/run-e2e-test.sh             # E2E test (fully automated)
 ```
@@ -563,13 +563,13 @@ go test ./...                               # Run all tests
 ### Scan Commands
 ```bash
 # Quick scan (no Flow Logs)
-./terminator scan quick --region us-east-1
+./terminat scan quick --region us-east-1
 
 # Deep scan (interactive)
-./terminator scan deep --region us-east-1 --duration 5
+./terminat scan deep --region us-east-1 --duration 5
 
 # Deep scan (automated)
-./terminator scan deep --region us-east-1 --duration 5 --auto-approve --auto-cleanup
+./terminat scan deep --region us-east-1 --duration 5 --auto-approve --auto-cleanup
 ```
 
 ### AWS Commands

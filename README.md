@@ -27,7 +27,7 @@ NAT Gateways charge $0.045 per GB for data processing. If your applications acce
 # Install
 git clone https://github.com/doitintl/terminator.git
 cd terminator
-go build -o terminator
+go build -o terminat
 
 # Configure AWS credentials
 export AWS_PROFILE=your-profile
@@ -54,7 +54,7 @@ Or build from source:
 ```bash
 git clone https://github.com/doitintl/terminator.git
 cd terminator
-go build -o terminator
+go build -o terminat
 ```
 
 ## Prerequisites
@@ -184,7 +184,7 @@ After a Deep Dive scan, Flow Logs data is retained for your review. Clean it up 
 aws logs describe-log-groups --log-group-name-prefix "/aws/vpc/flowlogs/terminator"
 
 # Delete log group
-terminator cleanup --region us-east-1 --log-group "/aws/vpc/flowlogs/terminator-1234567890"
+terminat cleanup --region us-east-1 --log-group "/aws/vpc/flowlogs/terminator-1234567890"
 ```
 
 ## Understanding the Results

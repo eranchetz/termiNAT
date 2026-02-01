@@ -5,7 +5,7 @@
 ### 1. Build the Application
 ```bash
 cd /Users/eran/Projects/NATInspector
-go build -o terminator
+go build -o terminat
 ```
 
 ### 2. Verify AWS Credentials
@@ -30,7 +30,7 @@ If not exists, run:
 **Purpose**: Verify basic NAT Gateway discovery and VPC endpoint detection
 
 ```bash
-./terminator scan quick --region us-east-1
+./terminat scan quick --region us-east-1
 ```
 
 **Expected Results:**
@@ -52,7 +52,7 @@ If not exists, run:
 **Purpose**: Verify Flow Logs creation, traffic collection, and analysis
 
 ```bash
-./terminator scan deep --region us-east-1 --duration 5
+./terminat scan deep --region us-east-1 --duration 5
 ```
 
 **Expected Results:**
@@ -91,7 +91,7 @@ DURATION=15 ./generate-traffic.sh
 
 **Run Scan:**
 ```bash
-./terminator scan deep --region us-east-1 --duration 5
+./terminat scan deep --region us-east-1 --duration 5
 ```
 
 **Expected Results:**
@@ -120,7 +120,7 @@ aws logs describe-log-groups --region us-east-1 --log-group-name-prefix "/aws/vp
 
 **Run Cleanup:**
 ```bash
-./terminator cleanup --region us-east-1 --log-group "/aws/vpc/flowlogs/terminator-XXXXXXXXXX"
+./terminat cleanup --region us-east-1 --log-group "/aws/vpc/flowlogs/terminator-XXXXXXXXXX"
 ```
 
 **Expected Results:**
@@ -142,26 +142,26 @@ aws logs describe-log-groups --region us-east-1 --log-group-name-prefix "/aws/vp
 
 #### Test 5a: Invalid Region
 ```bash
-./terminator scan quick --region invalid-region
+./terminat scan quick --region invalid-region
 ```
 **Expected**: Clear error message about invalid region
 
 #### Test 5b: No NAT Gateways
 ```bash
-./terminator scan quick --region ap-south-1
+./terminat scan quick --region ap-south-1
 ```
 **Expected**: "No NAT gateways found" message (if region has no NAT Gateways)
 
 #### Test 5c: Missing Permissions
 ```bash
 # Use credentials without required permissions
-./terminator scan deep --region us-east-1 --duration 5
+./terminat scan deep --region us-east-1 --duration 5
 ```
 **Expected**: Clear error about missing IAM permissions
 
 #### Test 5d: Invalid Duration
 ```bash
-./terminator scan deep --region us-east-1 --duration 100
+./terminat scan deep --region us-east-1 --duration 100
 ```
 **Expected**: Error message about duration limits (5-60 minutes)
 
@@ -204,13 +204,13 @@ aws logs describe-log-groups --region us-east-1 --log-group-name-prefix "/aws/vp
 
 ```bash
 # 5 minutes (minimum)
-./terminator scan deep --region us-east-1 --duration 5
+./terminat scan deep --region us-east-1 --duration 5
 
 # 15 minutes (recommended)
-./terminator scan deep --region us-east-1 --duration 15
+./terminat scan deep --region us-east-1 --duration 15
 
 # 30 minutes (comprehensive)
-./terminator scan deep --region us-east-1 --duration 30
+./terminat scan deep --region us-east-1 --duration 30
 ```
 
 **Validation:**

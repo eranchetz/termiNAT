@@ -17,15 +17,15 @@ Hey team! I built a tool to find hidden NAT Gateway costs and I need you to **gr
 ### Quick Install
 ```bash
 # macOS (Apple Silicon)
-curl -L https://github.com/eranchetz/termiNAT/releases/download/v0.0.1/terminator-darwin-arm64 -o terminator
+curl -L https://github.com/eranchetz/termiNAT/releases/download/v0.0.1/terminat-darwin-arm64 -o terminat
 chmod +x terminator
 
 # macOS (Intel)
-curl -L https://github.com/eranchetz/termiNAT/releases/download/v0.0.1/terminator-darwin-amd64 -o terminator
+curl -L https://github.com/eranchetz/termiNAT/releases/download/v0.0.1/terminat-darwin-amd64 -o terminat
 chmod +x terminator
 
 # Linux
-curl -L https://github.com/eranchetz/termiNAT/releases/download/v0.0.1/terminator-linux-amd64 -o terminator
+curl -L https://github.com/eranchetz/termiNAT/releases/download/v0.0.1/terminat-linux-amd64 -o terminat
 chmod +x terminator
 ```
 
@@ -36,7 +36,7 @@ export AWS_PROFILE=your-profile
 export AWS_REGION=us-east-1
 
 # Quick scan (instant, read-only, no resources created)
-./terminator scan quick --region us-east-1
+./terminat scan quick --region us-east-1
 ```
 
 **That's it!** You'll see:
@@ -48,7 +48,7 @@ export AWS_REGION=us-east-1
 
 ```bash
 # Deep dive scan (creates temporary Flow Logs, analyzes real traffic)
-./terminator scan deep --region us-east-1 --duration 5
+./terminat scan deep --region us-east-1 --duration 5
 ```
 
 **What happens:**
@@ -102,13 +102,13 @@ export AWS_REGION=us-east-1
 **Quick Scan Demo:**
 ```bash
 # Shows instant results in < 1 second
-./terminator scan quick --region us-east-1
+./terminat scan quick --region us-east-1
 ```
 
 **Deep Dive Demo:**
 ```bash
 # Shows real-time progress with countdown timer
-./terminator scan deep --region us-east-1 --duration 5
+./terminat scan deep --region us-east-1 --duration 5
 ```
 
 ## Interesting Test Scenarios
@@ -165,8 +165,8 @@ Be brutal. I want this to be bulletproof before we show customers.
 ---
 
 **TL;DR:**
-1. Install: `curl -L https://github.com/eranchetz/termiNAT/releases/download/v0.0.1/terminator-darwin-arm64 -o terminator && chmod +x terminator`
-2. Run: `./terminator scan quick --region us-east-1`
+1. Install: `curl -L https://github.com/eranchetz/termiNAT/releases/download/v0.0.1/terminat-darwin-arm64 -o terminat && chmod +x terminator`
+2. Run: `./terminat scan quick --region us-east-1`
 3. Break it and tell me what's wrong
 
 Thanks! 🙏

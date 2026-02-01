@@ -21,7 +21,7 @@ chmod +x terminator
 
 # Run (instant, read-only)
 export AWS_PROFILE=your-profile
-./terminator scan quick --region us-east-1
+./terminat scan quick --region us-east-1
 ```
 
 **What I need:**
@@ -48,7 +48,7 @@ Found $11.7M/year in savings in our test. Need you to grill it:
 curl -L https://github.com/eranchetz/termiNAT/releases/download/v0.0.1/terminator-darwin-arm64 -o terminator
 chmod +x terminator
 export AWS_PROFILE=your-profile
-./terminator scan quick --region us-east-1
+./terminat scan quick --region us-east-1
 ```
 
 Details: https://github.com/eranchetz/termiNAT/blob/main/QA_ANNOUNCEMENT.md
@@ -107,7 +107,7 @@ Try it in 2 minutes:
 curl -L https://github.com/eranchetz/termiNAT/releases/download/v0.0.1/terminator-darwin-arm64 -o terminator
 chmod +x terminator
 export AWS_PROFILE=your-profile
-./terminator scan quick --region us-east-1
+./terminat scan quick --region us-east-1
 
 (Instant, read-only, no resources created)
 ```

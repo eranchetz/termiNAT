@@ -77,7 +77,7 @@ Test Instance ID: i-00a5a75dc7db5e9b2
 
 ```bash
 # Build the binary
-go build -o terminator .
+go build -o terminat .
 
 # Verify it works
 ./terminat --help
@@ -323,7 +323,7 @@ echo ""
 
 # Step 2: Build binary
 echo "🔨 Step 2/7: Building termiNATor..."
-go build -o terminator .
+go build -o terminat .
 echo "✓ Build complete"
 echo ""
 
