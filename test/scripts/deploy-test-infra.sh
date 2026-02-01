@@ -7,22 +7,32 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Generate 3-char random suffix for uniqueness
-SUFFIX=$(openssl rand -hex 2 | cut -c1-3)
-
 # Configuration
-STACK_NAME="${STACK_NAME:-terminat-test-${SUFFIX}}"
 REGION="${AWS_REGION:-us-east-1}"
 TEMPLATE_FILE="test/infrastructure/test-stack.yaml"
 
-# Save stack name for other scripts
+# Reuse existing stack name if available, otherwise generate new one
 mkdir -p test/results
+if [ -f "test/results/stack-name.txt" ]; then
+    SAVED_STACK=$(cat test/results/stack-name.txt)
+    if [ -n "$SAVED_STACK" ]; then
+        STACK_NAME="${STACK_NAME:-$SAVED_STACK}"
+        echo -e "${YELLOW}Reusing previous stack name: $STACK_NAME${NC}"
+    fi
+fi
+
+# Generate new suffix only if no saved stack name
+if [ -z "$STACK_NAME" ]; then
+    SUFFIX=$(openssl rand -hex 2 | cut -c1-3)
+    STACK_NAME="terminat-test-${SUFFIX}"
+fi
+
+# Save stack name for other scripts
 echo "$STACK_NAME" > test/results/stack-name.txt
 
 echo -e "${GREEN}=== termiNATor Test Infrastructure Deployment ===${NC}"
 echo "Stack Name: $STACK_NAME"
 echo "Region: $REGION"
-echo "Suffix: $SUFFIX"
 echo ""
 
 # Check if stack exists

@@ -99,12 +99,14 @@ aws cloudformation wait stack-delete-complete \
 echo -e "${GREEN}Stack deleted successfully!${NC}"
 echo ""
 
-# Clean up local test results
+# Clean up local test results (keep stack-name.txt to reuse bucket name)
 if [ -d "test/results" ]; then
     echo -e "${YELLOW}Cleaning up local test results...${NC}"
-    rm -rf test/results/*
-    echo -e "${GREEN}Local results cleaned${NC}"
+    find test/results -type f ! -name 'stack-name.txt' -delete 2>/dev/null || true
+    echo -e "${GREEN}Local results cleaned (kept stack-name.txt for bucket reuse)${NC}"
 fi
 
 echo ""
 echo -e "${GREEN}=== Cleanup Complete ===${NC}"
+echo -e "${YELLOW}Note: stack-name.txt preserved to avoid S3 bucket name collision on next deploy${NC}"
+echo -e "${YELLOW}To force a new stack name, delete test/results/stack-name.txt${NC}"
