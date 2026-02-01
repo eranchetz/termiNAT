@@ -59,12 +59,12 @@ func getRegion() (string, error) {
 	if region != "" {
 		return region, nil
 	}
-	
+
 	// Fall back to AWS_REGION environment variable
 	if envRegion := os.Getenv("AWS_REGION"); envRegion != "" {
 		return envRegion, nil
 	}
-	
+
 	return "", fmt.Errorf("region not specified: use --region flag or set AWS_REGION environment variable")
 }
 
