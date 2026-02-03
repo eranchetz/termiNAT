@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/doitintl/terminator/internal/analysis"
 	"github.com/doitintl/terminator/internal/core"
+	"github.com/doitintl/terminator/internal/report"
 	"github.com/doitintl/terminator/pkg/types"
 )
 
@@ -35,7 +36,6 @@ const (
 	phaseWaitingStartup
 	phaseCollecting
 	phaseAnalyzing
-	phaseShowingResults
 	phaseAwaitingCleanup
 	phaseDone
 )
@@ -66,6 +66,8 @@ type deepScanModel struct {
 	phaseStartTime   time.Time
 	tipIndex         int
 	flowLogsStopped  bool
+	exportMsg        string
+	exportFormat     string
 }
 
 type tickMsg time.Time
@@ -84,7 +86,7 @@ type flowLogsStoppedMsg struct{}
 type deepScanErrorMsg struct{ err error }
 type deepScanCompleteMsg struct{}
 
-func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, autoApprove, autoCleanup bool) error {
+func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, autoApprove, autoCleanup bool, exportFormat string) error {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4"))
@@ -103,6 +105,7 @@ func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, dura
 		runID:        fmt.Sprintf("terminat-%d", time.Now().Unix()),
 		logGroupName: fmt.Sprintf("/aws/vpc/flowlogs/terminat-%d", time.Now().Unix()),
 		startTime:    time.Now(),
+		exportFormat: exportFormat,
 	}
 
 	// Set up signal handler for cleanup on interrupt
@@ -133,6 +136,29 @@ func (m *deepScanModel) cleanupFlowLogs() {
 			fmt.Println("✓ Flow Logs stopped successfully")
 		}
 		m.flowLogsStopped = true
+	}
+}
+
+func (m *deepScanModel) exportReport(format string) {
+	r := report.New(m.region, m.accountID, m.duration, m.trafficStats, m.costEstimate, m.endpointAnalysis)
+	timestamp := time.Now().Format("20060102-150405")
+
+	var filename string
+	var err error
+
+	switch format {
+	case "markdown":
+		filename = fmt.Sprintf("terminator-report-%s.md", timestamp)
+		err = r.SaveMarkdown(filename)
+	case "json":
+		filename = fmt.Sprintf("terminator-report-%s.json", timestamp)
+		err = r.SaveJSON(filename)
+	}
+
+	if err != nil {
+		m.exportMsg = fmt.Sprintf("❌ Export failed: %v", err)
+	} else {
+		m.exportMsg = fmt.Sprintf("✅ Exported to %s", filename)
 	}
 }
 
@@ -169,11 +195,17 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.phase = phaseDone
 				return m, tea.Quit
 			}
-		case "enter", " ":
-			if m.phase == phaseShowingResults {
-				m.phase = phaseAwaitingCleanup
+		case "m", "M":
+			if m.phase == phaseDone {
+				m.exportReport("markdown")
 				return m, nil
 			}
+		case "j", "J":
+			if m.phase == phaseDone {
+				m.exportReport("json")
+				return m, nil
+			}
+		case "enter", " ":
 			if m.done {
 				return m, tea.Quit
 			}
@@ -217,6 +249,9 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case flowLogsStoppedMsg:
 		m.flowLogsStopped = true
 		if m.autoApprove {
+			if m.exportFormat != "" {
+				m.exportReport(m.exportFormat)
+			}
 			if m.autoCleanup {
 				return m, m.deleteLogGroup
 			}
@@ -224,7 +259,7 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.phase = phaseDone
 			return m, tea.Quit
 		}
-		m.phase = phaseShowingResults
+		m.phase = phaseAwaitingCleanup
 		return m, nil
 
 	case deepScanErrorMsg:
@@ -263,10 +298,6 @@ func (m *deepScanModel) View() string {
 		b.WriteString(m.renderProgress())
 	case phaseAnalyzing:
 		b.WriteString(fmt.Sprintf("%s Analyzing traffic patterns...\n", m.spinner.View()))
-	case phaseShowingResults:
-		b.WriteString(m.renderResults())
-		b.WriteString("\n")
-		b.WriteString(infoStyle.Render("Press Enter to continue to cleanup options..."))
 	case phaseAwaitingCleanup:
 		b.WriteString(m.renderCleanupPrompt())
 	case phaseDone:
@@ -357,44 +388,6 @@ func (m *deepScanModel) renderProgress() string {
 	return b.String()
 }
 
-func (m *deepScanModel) renderResults() string {
-	var b strings.Builder
-	b.WriteString(successStyle.Render("✓ Flow Logs STOPPED - no ongoing Flow Logs charges\n\n"))
-
-	if m.trafficStats != nil && m.trafficStats.TotalRecords > 0 {
-		b.WriteString(stepStyle.Render("Traffic Analysis:\n"))
-		b.WriteString(fmt.Sprintf("  Total: %d records, %.2f MB\n",
-			m.trafficStats.TotalRecords, float64(m.trafficStats.TotalBytes)/(1024*1024)))
-		b.WriteString(fmt.Sprintf("  S3:       %.2f MB (%.1f%%)\n",
-			float64(m.trafficStats.S3Bytes)/(1024*1024), m.trafficStats.S3Percentage()))
-		b.WriteString(fmt.Sprintf("  DynamoDB: %.2f MB (%.1f%%)\n",
-			float64(m.trafficStats.DynamoBytes)/(1024*1024), m.trafficStats.DynamoPercentage()))
-		b.WriteString(fmt.Sprintf("  ECR:      %.2f MB (%.1f%%)\n\n",
-			float64(m.trafficStats.ECRBytes)/(1024*1024), m.trafficStats.ECRPercentage()))
-	} else {
-		b.WriteString(warningStyle.Render("No traffic data collected during the scan period.\n\n"))
-	}
-
-	// Show endpoint analysis summary
-	if m.endpointAnalysis != nil && m.endpointAnalysis.HasIssues() {
-		b.WriteString(warningStyle.Render("⚠️  VPC Endpoint Issues Detected:\n"))
-		if len(m.endpointAnalysis.MissingEndpoints) > 0 {
-			b.WriteString(fmt.Sprintf("  • %d missing endpoint(s)\n", len(m.endpointAnalysis.MissingEndpoints)))
-		}
-		if len(m.endpointAnalysis.MissingRoutes) > 0 {
-			b.WriteString(fmt.Sprintf("  • %d route table(s) missing endpoint routes\n", len(m.endpointAnalysis.MissingRoutes)))
-		}
-		b.WriteString("\n")
-	}
-
-	if m.costEstimate != nil && m.costEstimate.TotalSavingsMonthly > 0 {
-		b.WriteString(highlightStyle.Render(fmt.Sprintf("💰 Potential Savings: $%.2f/month ($%.2f/year)\n",
-			m.costEstimate.TotalSavingsMonthly, m.costEstimate.TotalSavingsMonthly*12)))
-	}
-
-	return b.String()
-}
-
 func (m *deepScanModel) renderCleanupPrompt() string {
 	var b strings.Builder
 	b.WriteString(successStyle.Render("✓ Flow Logs STOPPED\n\n"))
@@ -469,9 +462,10 @@ func (m *deepScanModel) renderFinalReport() string {
 	// Traffic Analysis
 	if m.trafficStats != nil && m.trafficStats.TotalRecords > 0 {
 		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
-		b.WriteString(stepStyle.Render("                      TRAFFIC ANALYSIS\n"))
+		b.WriteString(stepStyle.Render("                 COLLECTED TRAFFIC SAMPLE\n"))
 		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
 
+		b.WriteString(infoStyle.Render(fmt.Sprintf("Sample period: %d minutes\n\n", m.duration)))
 		b.WriteString(fmt.Sprintf("Total Traffic: %d records, %.2f MB\n\n",
 			m.trafficStats.TotalRecords, float64(m.trafficStats.TotalBytes)/(1024*1024)))
 
@@ -506,6 +500,7 @@ func (m *deepScanModel) renderFinalReport() string {
 		b.WriteString(stepStyle.Render("                      COST ESTIMATE\n"))
 		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
 
+		b.WriteString(warningStyle.Render(fmt.Sprintf("⚠️  Projected from %d-minute sample to monthly estimate\n\n", m.duration)))
 		b.WriteString(fmt.Sprintf("NAT Gateway Data Processing: $%.4f per GB\n\n", m.costEstimate.NATGatewayPricePerGB))
 		b.WriteString(stepStyle.Render("Projected Monthly Costs:\n"))
 		b.WriteString(fmt.Sprintf("  Current NAT Gateway cost:     $%.2f/month\n", m.costEstimate.CurrentMonthlyCost))
@@ -514,6 +509,9 @@ func (m *deepScanModel) renderFinalReport() string {
 		b.WriteString("  ─────────────────────────────────────────\n")
 		b.WriteString(highlightStyle.Render(fmt.Sprintf("  TOTAL POTENTIAL SAVINGS:      $%.2f/month ($%.2f/year)\n\n",
 			m.costEstimate.TotalSavingsMonthly, m.costEstimate.TotalSavingsMonthly*12)))
+
+		b.WriteString(infoStyle.Render("Note: Actual costs depend on real traffic patterns. Run longer\n"))
+		b.WriteString(infoStyle.Render("scans during peak hours for more accurate estimates.\n\n"))
 	}
 
 	// Remediation Steps
@@ -584,7 +582,15 @@ func (m *deepScanModel) renderFinalReport() string {
 	b.WriteString("   • Actual costs may vary based on traffic patterns\n")
 	b.WriteString("   • Gateway VPC Endpoints for S3 and DynamoDB are FREE\n\n")
 
-	b.WriteString(infoStyle.Render("Press Enter to exit"))
+	// Export options
+	b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
+	b.WriteString(stepStyle.Render("                       EXPORT OPTIONS\n"))
+	b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
+	b.WriteString("  [M] Export as Markdown    [J] Export as JSON    [Enter] Exit\n")
+	if m.exportMsg != "" {
+		b.WriteString(fmt.Sprintf("\n  %s\n", m.exportMsg))
+	}
+
 	return b.String()
 }
 
