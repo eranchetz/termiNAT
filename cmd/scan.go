@@ -12,12 +12,13 @@ import (
 )
 
 var (
-	region      string
-	profile     string
-	duration    int
-	natIDs      []string
-	autoApprove bool
-	autoCleanup bool
+	region       string
+	profile      string
+	duration     int
+	natIDs       []string
+	autoApprove  bool
+	autoCleanup  bool
+	exportFormat string
 )
 
 var scanCmd = &cobra.Command{
@@ -55,6 +56,7 @@ func init() {
 	deepCmd.Flags().StringSliceVar(&natIDs, "nat-gateway-ids", []string{}, "Specific NAT Gateway IDs to analyze (optional)")
 	deepCmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Skip approval prompts (for automation)")
 	deepCmd.Flags().BoolVar(&autoCleanup, "auto-cleanup", false, "Automatically delete log groups after scan")
+	deepCmd.Flags().StringVarP(&exportFormat, "export", "e", "", "Export report format: markdown, json")
 }
 
 func getRegion(profile string) (string, error) {
@@ -164,5 +166,5 @@ func runDeepScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Run deep scan with UI
-	return ui.RunDeepScan(ctx, scanner, selectedRegion, duration, natIDs, autoApprove, autoCleanup)
+	return ui.RunDeepScan(ctx, scanner, selectedRegion, duration, natIDs, autoApprove, autoCleanup, exportFormat)
 }
