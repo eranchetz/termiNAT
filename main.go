@@ -8,5 +8,6 @@ import (
 var Version = "dev"
 
 func main() {
+	cmd.SetVersion(Version)
 	cmd.Execute()
 }

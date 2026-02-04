@@ -7,15 +7,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const Version = "0.2.0"
+var version = "dev"
 
 var rootCmd = &cobra.Command{
-	Use:     "terminat",
-	Short:   "termiNATor - Terminate unnecessary NAT Gateway costs",
-	Version: Version,
+	Use:   "terminat",
+	Short: "termiNATor - Terminate unnecessary NAT Gateway costs",
 	Long: `termiNATor helps AWS customers identify and quantify avoidable NAT Gateway 
 spend caused by workloads using NAT to reach AWS services when VPC endpoints 
 could be used instead.`,
+}
+
+func SetVersion(v string) {
+	version = v
+	rootCmd.Version = v
 }
 
 func Execute() {
