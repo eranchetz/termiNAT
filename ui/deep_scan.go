@@ -731,11 +731,31 @@ func (m *deepScanModel) createFlowLogs() tea.Msg {
 }
 
 func (m *deepScanModel) waitForStartup() tea.Msg {
-	time.Sleep(5 * time.Minute)
-	m.phase = phaseCollecting
-	m.phaseStartTime = time.Now()
-	time.Sleep(time.Duration(m.duration) * time.Minute)
-	return collectionCompleteMsg{}
+	// Poll for Flow Logs to become ACTIVE instead of fixed sleep
+	timeout := 10 * time.Minute
+	pollInterval := 30 * time.Second
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		activeFlowLogs, err := m.scanner.CheckActiveFlowLogs(m.ctx, m.logGroupName)
+		if err == nil && len(activeFlowLogs) > 0 {
+			// Flow Logs are active, proceed to collection
+			m.phase = phaseCollecting
+			m.phaseStartTime = time.Now()
+			time.Sleep(time.Duration(m.duration) * time.Minute)
+			return collectionCompleteMsg{}
+		}
+
+		// Check if context was cancelled
+		select {
+		case <-m.ctx.Done():
+			return deepScanErrorMsg{err: fmt.Errorf("scan cancelled during Flow Logs startup")}
+		case <-time.After(pollInterval):
+			// Continue polling
+		}
+	}
+
+	return deepScanErrorMsg{err: fmt.Errorf("timeout waiting for Flow Logs to become ACTIVE after %v", timeout)}
 }
 
 func (m *deepScanModel) analyzeTraffic() tea.Msg {

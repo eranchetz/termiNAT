@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 )
 
 type SourceIPStats struct {
@@ -40,6 +42,51 @@ func NewTrafficAnalyzer() (*TrafficAnalyzer, error) {
 		return nil, err
 	}
 	return &TrafficAnalyzer{classifier: classifier}, nil
+}
+
+// AnalyzeAggregatedResults processes aggregated CloudWatch query results
+func (ta *TrafficAnalyzer) AnalyzeAggregatedResults(results [][]types.ResultField) (*TrafficStats, error) {
+	ta.stats = TrafficStats{SourceIPs: make(map[string]*SourceIPStats)}
+
+	for _, result := range results {
+		var dstAddr string
+		var totalBytes int64
+
+		// Extract fields from aggregated result
+		for _, field := range result {
+			if *field.Field == "pkt_dstaddr" {
+				dstAddr = *field.Value
+			} else if *field.Field == "total_bytes" {
+				fmt.Sscanf(*field.Value, "%d", &totalBytes)
+			}
+		}
+
+		if dstAddr == "" || totalBytes == 0 {
+			continue
+		}
+
+		service := ta.classifier.ClassifyIP(dstAddr)
+
+		ta.stats.TotalBytes += totalBytes
+		ta.stats.TotalRecords++
+
+		switch service {
+		case "s3":
+			ta.stats.S3Bytes += totalBytes
+			ta.stats.S3Records++
+		case "dynamodb":
+			ta.stats.DynamoBytes += totalBytes
+			ta.stats.DynamoRecords++
+		case "ecr":
+			ta.stats.ECRBytes += totalBytes
+			ta.stats.ECRRecords++
+		default:
+			ta.stats.OtherBytes += totalBytes
+			ta.stats.OtherRecords++
+		}
+	}
+
+	return &ta.stats, nil
 }
 
 func (ta *TrafficAnalyzer) AnalyzeFlowLogs(logLines []string) (*TrafficStats, error) {

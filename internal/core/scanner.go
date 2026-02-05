@@ -83,12 +83,41 @@ func (s *Scanner) ValidateFlowLogsRole(ctx context.Context, roleARN string) erro
 	}
 	roleName := parts[len(parts)-1]
 
-	_, err := s.iamClient.GetRole(ctx, &iam.GetRoleInput{
+	// Check if role exists
+	roleResp, err := s.iamClient.GetRole(ctx, &iam.GetRoleInput{
 		RoleName: &roleName,
 	})
 	if err != nil {
 		return fmt.Errorf("IAM role '%s' not found. Run: ./scripts/setup-flowlogs-role.sh", roleName)
 	}
+
+	// Verify trust policy allows vpc-flow-logs.amazonaws.com
+	trustPolicy := *roleResp.Role.AssumeRolePolicyDocument
+	if !strings.Contains(trustPolicy, "vpc-flow-logs.amazonaws.com") {
+		return fmt.Errorf("IAM role '%s' trust policy does not allow vpc-flow-logs.amazonaws.com. Run: ./scripts/setup-flowlogs-role.sh", roleName)
+	}
+
+	// Check for CloudWatch Logs permissions
+	policiesResp, err := s.iamClient.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
+		RoleName: &roleName,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list role policies: %w", err)
+	}
+
+	hasCloudWatchPolicy := false
+	for _, policy := range policiesResp.AttachedPolicies {
+		if strings.Contains(*policy.PolicyName, "CloudWatchLogs") ||
+			strings.Contains(*policy.PolicyName, "FlowLogs") {
+			hasCloudWatchPolicy = true
+			break
+		}
+	}
+
+	if !hasCloudWatchPolicy {
+		return fmt.Errorf("IAM role '%s' missing CloudWatch Logs permissions. Run: ./scripts/setup-flowlogs-role.sh", roleName)
+	}
+
 	return nil
 }
 
@@ -152,10 +181,15 @@ func (s *Scanner) CheckActiveFlowLogs(ctx context.Context, logGroupName string) 
 	return s.ec2Client.CheckActiveFlowLogs(ctx, logGroupName)
 }
 
-// AnalyzeTraffic analyzes Flow Logs and classifies traffic
+// AnalyzeTraffic analyzes Flow Logs and classifies traffic using aggregated CloudWatch query
 func (s *Scanner) AnalyzeTraffic(ctx context.Context, logGroupName string, startTime, endTime int64) (*analysis.TrafficStats, error) {
-	// Query Flow Logs
-	queryID, err := s.cwlClient.StartQuery(ctx, logGroupName, startTime, endTime, "fields @message | filter @message like /ACCEPT/")
+	// Use aggregated query to avoid OOM on large datasets
+	query := `fields @timestamp, pkt_dstaddr, bytes
+| filter action = "ACCEPT"
+| stats sum(bytes) as total_bytes by pkt_dstaddr
+| sort total_bytes desc`
+
+	queryID, err := s.cwlClient.StartQuery(ctx, logGroupName, startTime, endTime, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start query: %w", err)
 	}
@@ -166,23 +200,13 @@ func (s *Scanner) AnalyzeTraffic(ctx context.Context, logGroupName string, start
 		return nil, fmt.Errorf("failed to get query results: %w", err)
 	}
 
-	// Extract log lines
-	var logLines []string
-	for _, result := range results {
-		for _, field := range result {
-			if *field.Field == "@message" {
-				logLines = append(logLines, *field.Value)
-			}
-		}
-	}
-
-	// Analyze traffic
+	// Process aggregated results
 	analyzer, err := analysis.NewTrafficAnalyzer()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create analyzer: %w", err)
 	}
 
-	return analyzer.AnalyzeFlowLogs(logLines)
+	return analyzer.AnalyzeAggregatedResults(results)
 }
 
 // CalculateCosts calculates cost estimates based on traffic analysis
