@@ -264,7 +264,6 @@ func (a *EndpointAnalysis) HasInterfaceEndpoints() bool {
 	return len(a.InterfaceEndpoints) > 0
 }
 
-
 // AnalyzeAllVPCEndpoints runs quick scan analysis on all VPCs with NAT Gateways
 // Returns findings for all VPCs
 func AnalyzeAllVPCEndpoints(ctx context.Context, scanner interface {

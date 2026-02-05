@@ -184,8 +184,8 @@ func ParseFlowLogLine(line string) (*FlowLogRecord, error) {
 	fmt.Sscanf(fields[9], "%d", &bytes)
 
 	return &FlowLogRecord{
-		SrcAddr:  fields[3],  // pkt-srcaddr
-		DstAddr:  fields[4],  // pkt-dstaddr
+		SrcAddr:  fields[3], // pkt-srcaddr
+		DstAddr:  fields[4], // pkt-dstaddr
 		SrcPort:  fields[5],
 		DstPort:  fields[6],
 		Protocol: fields[7],
