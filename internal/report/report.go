@@ -93,19 +93,19 @@ func (r *Report) ToMarkdown() string {
 	// Traffic Analysis
 	if r.TrafficStats != nil && r.TrafficStats.TotalRecords > 0 {
 		b.WriteString("## Collected Traffic Sample\n\n")
-		b.WriteString(fmt.Sprintf("**Total:** %d records, %.2f MB\n\n",
-			r.TrafficStats.TotalRecords, float64(r.TrafficStats.TotalBytes)/(1024*1024)))
+		b.WriteString(fmt.Sprintf("**Total:** %d records, %.2f GB\n\n",
+			r.TrafficStats.TotalRecords, float64(r.TrafficStats.TotalBytes)/(1024*1024*1024)))
 
-		b.WriteString("| Service | Data (MB) | Percentage |\n")
+		b.WriteString("| Service | Data (GB) | Percentage |\n")
 		b.WriteString("|---------|-----------|------------|\n")
 		b.WriteString(fmt.Sprintf("| S3 | %.2f | %.1f%% |\n",
-			float64(r.TrafficStats.S3Bytes)/(1024*1024), r.TrafficStats.S3Percentage()))
+			float64(r.TrafficStats.S3Bytes)/(1024*1024*1024), r.TrafficStats.S3Percentage()))
 		b.WriteString(fmt.Sprintf("| DynamoDB | %.2f | %.1f%% |\n",
-			float64(r.TrafficStats.DynamoBytes)/(1024*1024), r.TrafficStats.DynamoPercentage()))
+			float64(r.TrafficStats.DynamoBytes)/(1024*1024*1024), r.TrafficStats.DynamoPercentage()))
 		b.WriteString(fmt.Sprintf("| ECR | %.2f | %.1f%% |\n",
-			float64(r.TrafficStats.ECRBytes)/(1024*1024), r.TrafficStats.ECRPercentage()))
+			float64(r.TrafficStats.ECRBytes)/(1024*1024*1024), r.TrafficStats.ECRPercentage()))
 		b.WriteString(fmt.Sprintf("| Other | %.2f | %.1f%% |\n\n",
-			float64(r.TrafficStats.OtherBytes)/(1024*1024), r.TrafficStats.OtherPercentage()))
+			float64(r.TrafficStats.OtherBytes)/(1024*1024*1024), r.TrafficStats.OtherPercentage()))
 	}
 
 	// Cost Estimate

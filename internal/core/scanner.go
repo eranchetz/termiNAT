@@ -3,11 +3,13 @@ package core
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/doitintl/terminator/internal/analysis"
 	"github.com/doitintl/terminator/internal/aws"
@@ -20,6 +22,7 @@ type Scanner struct {
 	accountID string
 	ec2Client *aws.EC2Client
 	cwlClient *aws.CloudWatchLogsClient
+	iamClient *iam.Client
 }
 
 // NewScanner creates a new scanner instance
@@ -57,6 +60,7 @@ func NewScanner(ctx context.Context, region, profile string) (*Scanner, error) {
 		accountID: accountID,
 		ec2Client: aws.NewEC2Client(ec2.NewFromConfig(cfg)),
 		cwlClient: aws.NewCloudWatchLogsClient(cloudwatchlogs.NewFromConfig(cfg)),
+		iamClient: iam.NewFromConfig(cfg),
 	}, nil
 }
 
@@ -68,6 +72,24 @@ func (s *Scanner) GetAccountID() string {
 // GetRegion returns the AWS region
 func (s *Scanner) GetRegion() string {
 	return s.region
+}
+
+// ValidateFlowLogsRole checks if the IAM role for Flow Logs exists
+func (s *Scanner) ValidateFlowLogsRole(ctx context.Context, roleARN string) error {
+	// Extract role name from ARN (arn:aws:iam::123456789012:role/RoleName)
+	parts := strings.Split(roleARN, "/")
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid role ARN format: %s", roleARN)
+	}
+	roleName := parts[len(parts)-1]
+
+	_, err := s.iamClient.GetRole(ctx, &iam.GetRoleInput{
+		RoleName: &roleName,
+	})
+	if err != nil {
+		return fmt.Errorf("IAM role '%s' not found. Run: ./scripts/setup-flowlogs-role.sh", roleName)
+	}
+	return nil
 }
 
 // DiscoverNATGateways finds all NAT Gateways in the region

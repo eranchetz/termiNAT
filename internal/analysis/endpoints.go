@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -261,4 +262,144 @@ func (a *EndpointAnalysis) GetTotalInterfaceEndpointMonthlyCost() float64 {
 // HasInterfaceEndpoints returns true if there are Interface endpoints
 func (a *EndpointAnalysis) HasInterfaceEndpoints() bool {
 	return len(a.InterfaceEndpoints) > 0
+}
+
+
+// AnalyzeAllVPCEndpoints runs quick scan analysis on all VPCs with NAT Gateways
+// Returns findings for all VPCs
+func AnalyzeAllVPCEndpoints(ctx context.Context, scanner interface {
+	DiscoverVPCEndpoints(ctx context.Context, vpcID string) ([]types.VPCEndpoint, error)
+	DiscoverRouteTables(ctx context.Context, vpcID string) ([]types.RouteTable, error)
+}, nats []types.NATGateway) []types.Finding {
+	var findings []types.Finding
+
+	// Group NATs by VPC
+	vpcNATs := make(map[string][]types.NATGateway)
+	for _, nat := range nats {
+		vpcNATs[nat.VPCID] = append(vpcNATs[nat.VPCID], nat)
+	}
+
+	// Check each VPC for missing endpoints
+	for vpcID := range vpcNATs {
+		endpoints, err := scanner.DiscoverVPCEndpoints(ctx, vpcID)
+		if err != nil {
+			continue
+		}
+
+		routeTables, err := scanner.DiscoverRouteTables(ctx, vpcID)
+		if err != nil {
+			continue
+		}
+
+		// Check for S3 gateway endpoint
+		hasS3Gateway := false
+		s3EndpointRTs := []string{}
+		for _, ep := range endpoints {
+			if strings.Contains(ep.ServiceName, ".s3") && ep.Type == "Gateway" {
+				hasS3Gateway = true
+				s3EndpointRTs = ep.RouteTables
+				break
+			}
+		}
+
+		if !hasS3Gateway {
+			findings = append(findings, types.Finding{
+				Type:        "missing-endpoint",
+				Severity:    "high",
+				Title:       "Missing S3 Gateway Endpoint",
+				Description: fmt.Sprintf("VPC %s has NAT Gateway(s) but no S3 Gateway endpoint", vpcID),
+				VPCID:       vpcID,
+				Service:     "S3",
+				Action:      "Create S3 Gateway VPC endpoint and associate with private route tables",
+				Impact:      "All S3 traffic is going through NAT Gateway, incurring $0.045/GB data processing charges",
+			})
+		} else {
+			// Check route table associations
+			natRouteTables := getRouteTablesWithNAT(routeTables)
+			missingAssociations := findMissingAssociations(natRouteTables, s3EndpointRTs)
+			if len(missingAssociations) > 0 {
+				findings = append(findings, types.Finding{
+					Type:        "misconfigured-endpoint",
+					Severity:    "high",
+					Title:       "S3 Gateway Endpoint Missing Route Table Associations",
+					Description: fmt.Sprintf("VPC %s: S3 endpoint not associated with %d route table(s)", vpcID, len(missingAssociations)),
+					VPCID:       vpcID,
+					Service:     "S3",
+					Action:      fmt.Sprintf("Associate S3 endpoint with: %s", strings.Join(missingAssociations, ", ")),
+					Impact:      "S3 traffic from some subnets still goes through NAT Gateway",
+				})
+			}
+		}
+
+		// Check for DynamoDB gateway endpoint
+		hasDDBGateway := false
+		ddbEndpointRTs := []string{}
+		for _, ep := range endpoints {
+			if strings.Contains(ep.ServiceName, ".dynamodb") && ep.Type == "Gateway" {
+				hasDDBGateway = true
+				ddbEndpointRTs = ep.RouteTables
+				break
+			}
+		}
+
+		if !hasDDBGateway {
+			findings = append(findings, types.Finding{
+				Type:        "missing-endpoint",
+				Severity:    "high",
+				Title:       "Missing DynamoDB Gateway Endpoint",
+				Description: fmt.Sprintf("VPC %s has NAT Gateway(s) but no DynamoDB Gateway endpoint", vpcID),
+				VPCID:       vpcID,
+				Service:     "DynamoDB",
+				Action:      "Create DynamoDB Gateway VPC endpoint and associate with private route tables",
+				Impact:      "All DynamoDB traffic is going through NAT Gateway, incurring $0.045/GB data processing charges",
+			})
+		} else {
+			natRouteTables := getRouteTablesWithNAT(routeTables)
+			missingAssociations := findMissingAssociations(natRouteTables, ddbEndpointRTs)
+			if len(missingAssociations) > 0 {
+				findings = append(findings, types.Finding{
+					Type:        "misconfigured-endpoint",
+					Severity:    "high",
+					Title:       "DynamoDB Gateway Endpoint Missing Route Table Associations",
+					Description: fmt.Sprintf("VPC %s: DynamoDB endpoint not associated with %d route table(s)", vpcID, len(missingAssociations)),
+					VPCID:       vpcID,
+					Service:     "DynamoDB",
+					Action:      fmt.Sprintf("Associate DynamoDB endpoint with: %s", strings.Join(missingAssociations, ", ")),
+					Impact:      "DynamoDB traffic from some subnets still goes through NAT Gateway",
+				})
+			}
+		}
+	}
+
+	return findings
+}
+
+func getRouteTablesWithNAT(routeTables []types.RouteTable) []string {
+	var result []string
+	for _, rt := range routeTables {
+		for _, route := range rt.Routes {
+			if route.TargetType == "nat-gateway" && route.DestinationCIDR == "0.0.0.0/0" {
+				result = append(result, rt.ID)
+				break
+			}
+		}
+	}
+	return result
+}
+
+func findMissingAssociations(natRouteTables, endpointRTs []string) []string {
+	var missing []string
+	for _, rtID := range natRouteTables {
+		found := false
+		for _, epRT := range endpointRTs {
+			if epRT == rtID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, rtID)
+		}
+	}
+	return missing
 }

@@ -19,6 +19,7 @@ var (
 	autoApprove  bool
 	autoCleanup  bool
 	exportFormat string
+	outputFile   string
 )
 
 var scanCmd = &cobra.Command{
@@ -39,7 +40,20 @@ var deepCmd = &cobra.Command{
 	Use:   "deep",
 	Short: "Deep dive analysis with Flow Logs",
 	Long: `Enables short-lived Flow Logs to quantify actual NAT traffic to AWS services 
-and calculate potential savings. Requires Flow Log permissions.`,
+and calculate potential savings. Requires Flow Log permissions.
+
+Examples:
+  # Basic deep scan
+  terminat scan deep --region us-east-1
+
+  # Export report to markdown
+  terminat scan deep --region us-east-1 --export markdown
+
+  # Export to custom file
+  terminat scan deep --region us-east-1 --export json --output report.json
+
+  # Fully automated scan with export
+  terminat scan deep --region us-east-1 --auto-approve --auto-cleanup --export markdown`,
 	RunE: runDeepScan,
 }
 
@@ -56,7 +70,8 @@ func init() {
 	deepCmd.Flags().StringSliceVar(&natIDs, "nat-gateway-ids", []string{}, "Specific NAT Gateway IDs to analyze (optional)")
 	deepCmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Skip approval prompts (for automation)")
 	deepCmd.Flags().BoolVar(&autoCleanup, "auto-cleanup", false, "Automatically delete log groups after scan")
-	deepCmd.Flags().StringVarP(&exportFormat, "export", "e", "", "Export report format: markdown, json")
+	deepCmd.Flags().StringVarP(&exportFormat, "export", "e", "", "Export report format [json|markdown]")
+	deepCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file path for export (requires --export)")
 }
 
 func getRegion(profile string) (string, error) {
@@ -149,6 +164,11 @@ func runDeepScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("duration must be between 5 and 60 minutes")
 	}
 
+	// Validate --output requires --export
+	if outputFile != "" && exportFormat == "" {
+		return fmt.Errorf("--output requires --export flag (e.g., --export markdown --output report.md)")
+	}
+
 	// Get profile from flag or environment (optional)
 	selectedProfile := getProfile()
 
@@ -166,5 +186,5 @@ func runDeepScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Run deep scan with UI
-	return ui.RunDeepScan(ctx, scanner, selectedRegion, duration, natIDs, autoApprove, autoCleanup, exportFormat)
+	return ui.RunDeepScan(ctx, scanner, selectedRegion, duration, natIDs, autoApprove, autoCleanup, exportFormat, outputFile)
 }

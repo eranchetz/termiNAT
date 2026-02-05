@@ -178,12 +178,14 @@ func ParseFlowLogLine(line string) (*FlowLogRecord, error) {
 		return nil, fmt.Errorf("invalid flow log format")
 	}
 
+	// Custom format: interface-id srcaddr dstaddr pkt-srcaddr pkt-dstaddr srcport dstport protocol packets bytes start end action log-status
+	// Indices:       0            1       2       3           4           5       6       7        8       9     10    11  12     13
 	var bytes int64
-	fmt.Sscanf(fields[10], "%d", &bytes)
+	fmt.Sscanf(fields[9], "%d", &bytes)
 
 	return &FlowLogRecord{
-		SrcAddr:  fields[3],
-		DstAddr:  fields[4],
+		SrcAddr:  fields[3],  // pkt-srcaddr
+		DstAddr:  fields[4],  // pkt-dstaddr
 		SrcPort:  fields[5],
 		DstPort:  fields[6],
 		Protocol: fields[7],

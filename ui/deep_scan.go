@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -16,6 +17,8 @@ import (
 	"github.com/doitintl/terminator/internal/core"
 	"github.com/doitintl/terminator/internal/report"
 	"github.com/doitintl/terminator/pkg/types"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
 
 var tips = []string{
@@ -57,6 +60,8 @@ type deepScanModel struct {
 	trafficStats     *analysis.TrafficStats
 	costEstimate     *analysis.CostEstimate
 	endpointAnalysis *analysis.EndpointAnalysis
+	allFindings      []types.Finding // Quick scan findings for ALL VPCs
+	deepScannedVPC   string          // VPC that was deep scanned
 	recommendations  []analysis.Recommendation
 	region           string
 	accountID        string
@@ -68,6 +73,7 @@ type deepScanModel struct {
 	flowLogsStopped  bool
 	exportMsg        string
 	exportFormat     string
+	outputFile       string
 }
 
 type tickMsg time.Time
@@ -81,12 +87,14 @@ type trafficAnalyzedMsg struct {
 	stats            *analysis.TrafficStats
 	cost             *analysis.CostEstimate
 	endpointAnalysis *analysis.EndpointAnalysis
+	allFindings      []types.Finding
+	deepScannedVPC   string
 }
 type flowLogsStoppedMsg struct{}
 type deepScanErrorMsg struct{ err error }
 type deepScanCompleteMsg struct{}
 
-func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, autoApprove, autoCleanup bool, exportFormat string) error {
+func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, autoApprove, autoCleanup bool, exportFormat, outputFile string) error {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4"))
@@ -106,6 +114,7 @@ func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, dura
 		logGroupName: fmt.Sprintf("/aws/vpc/flowlogs/terminat-%d", time.Now().Unix()),
 		startTime:    time.Now(),
 		exportFormat: exportFormat,
+		outputFile:   outputFile,
 	}
 
 	// Set up signal handler for cleanup on interrupt
@@ -141,24 +150,39 @@ func (m *deepScanModel) cleanupFlowLogs() {
 
 func (m *deepScanModel) exportReport(format string) {
 	r := report.New(m.region, m.accountID, m.duration, m.trafficStats, m.costEstimate, m.endpointAnalysis)
-	timestamp := time.Now().Format("20060102-150405")
 
 	var filename string
 	var err error
 
+	// Use custom filename if provided, otherwise generate timestamped name
+	if m.outputFile != "" {
+		filename = m.outputFile
+	} else {
+		timestamp := time.Now().Format("20060102-150405")
+		ext := ".md"
+		if format == "json" {
+			ext = ".json"
+		}
+		filename = fmt.Sprintf("terminator-report-%s%s", timestamp, ext)
+	}
+
 	switch format {
 	case "markdown":
-		filename = fmt.Sprintf("terminator-report-%s.md", timestamp)
 		err = r.SaveMarkdown(filename)
 	case "json":
-		filename = fmt.Sprintf("terminator-report-%s.json", timestamp)
 		err = r.SaveJSON(filename)
+	}
+
+	// Get absolute path for clear output
+	absPath, _ := filepath.Abs(filename)
+	if absPath == "" {
+		absPath = filename
 	}
 
 	if err != nil {
 		m.exportMsg = fmt.Sprintf("❌ Export failed: %v", err)
 	} else {
-		m.exportMsg = fmt.Sprintf("✅ Exported to %s", filename)
+		m.exportMsg = fmt.Sprintf("✅ Report saved: %s", absPath)
 	}
 }
 
@@ -191,9 +215,12 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			if m.phase == phaseAwaitingCleanup {
-				m.done = true
+				// Auto-export if --export flag was provided
+				if m.exportFormat != "" {
+					m.exportReport(m.exportFormat)
+				}
 				m.phase = phaseDone
-				return m, tea.Quit
+				return m, nil
 			}
 		case "m", "M":
 			if m.phase == phaseDone {
@@ -206,7 +233,7 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "enter", " ":
-			if m.done {
+			if m.phase == phaseDone {
 				return m, tea.Quit
 			}
 		}
@@ -244,6 +271,8 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.trafficStats = msg.stats
 		m.costEstimate = msg.cost
 		m.endpointAnalysis = msg.endpointAnalysis
+		m.allFindings = msg.allFindings
+		m.deepScannedVPC = msg.deepScannedVPC
 		return m, m.stopFlowLogs
 
 	case flowLogsStoppedMsg:
@@ -269,9 +298,12 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case deepScanCompleteMsg:
-		m.done = true
+		// Auto-export if --export flag was provided
+		if m.exportFormat != "" {
+			m.exportReport(m.exportFormat)
+		}
 		m.phase = phaseDone
-		return m, tea.Quit
+		return m, nil
 	}
 	return m, nil
 }
@@ -407,10 +439,57 @@ func (m *deepScanModel) renderFinalReport() string {
 	b.WriteString(successStyle.Render("✓ Deep Dive Scan Complete\n"))
 	b.WriteString(successStyle.Render("✓ Flow Logs STOPPED\n\n"))
 
-	// VPC Endpoint Analysis Section
+	// NAT Gateway Overview - show which were deep scanned vs config-only
+	b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
+	b.WriteString(stepStyle.Render("                    NAT GATEWAY OVERVIEW\n"))
+	b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
+
+	// Group NATs by VPC
+	vpcNATs := make(map[string][]types.NATGateway)
+	for _, nat := range m.nats {
+		vpcNATs[nat.VPCID] = append(vpcNATs[nat.VPCID], nat)
+	}
+
+	for vpcID, nats := range vpcNATs {
+		isDeepScanned := vpcID == m.deepScannedVPC
+		if isDeepScanned {
+			b.WriteString(highlightStyle.Render(fmt.Sprintf("📊 VPC: %s [DEEP SCANNED - Traffic Analyzed]\n", vpcID)))
+		} else {
+			b.WriteString(infoStyle.Render(fmt.Sprintf("📋 VPC: %s [Config Check Only]\n", vpcID)))
+		}
+		for _, nat := range nats {
+			mode := nat.AvailabilityMode
+			if mode == "" {
+				mode = "zonal"
+			}
+			b.WriteString(fmt.Sprintf("   • %s (%s)\n", nat.ID, mode))
+		}
+		b.WriteString("\n")
+	}
+
+	// Show findings for ALL VPCs (quick scan results)
+	if len(m.allFindings) > 0 {
+		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
+		b.WriteString(stepStyle.Render("              VPC ENDPOINT ISSUES (All VPCs)\n"))
+		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
+
+		b.WriteString(warningStyle.Render(fmt.Sprintf("⚠️  Found %d issue(s) across all VPCs:\n\n", len(m.allFindings))))
+		for _, finding := range m.allFindings {
+			b.WriteString(fmt.Sprintf("  [%s] %s\n", strings.ToUpper(finding.Severity), finding.Title))
+			b.WriteString(fmt.Sprintf("      %s\n", finding.Description))
+			b.WriteString(infoStyle.Render(fmt.Sprintf("      → %s\n\n", finding.Action)))
+		}
+	} else {
+		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
+		b.WriteString(stepStyle.Render("              VPC ENDPOINT STATUS (All VPCs)\n"))
+		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
+		b.WriteString(successStyle.Render("✓ All VPCs have proper endpoint configuration!\n\n"))
+	}
+
+	// VPC Endpoint Analysis Section for deep scanned VPC (detailed)
 	if m.endpointAnalysis != nil {
 		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
-		b.WriteString(stepStyle.Render("                  VPC ENDPOINT CONFIGURATION\n"))
+		b.WriteString(stepStyle.Render("         DETAILED ENDPOINT CONFIG (Deep Scanned VPC)\n"))
 		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
 
 		b.WriteString(fmt.Sprintf("VPC: %s\n\n", m.endpointAnalysis.VPCID))
@@ -449,10 +528,10 @@ func (m *deepScanModel) renderFinalReport() string {
 				if name == "" {
 					name = c.Endpoint.ID
 				}
-				b.WriteString(fmt.Sprintf("  • %s (%s): $%.2f/month\n", c.ServiceName, name, c.MonthlyCost))
+				b.WriteString(fmt.Sprintf("  • %s (%s): %s/month\n", c.ServiceName, name, formatCurrency(c.MonthlyCost)))
 			}
 			totalCost := m.endpointAnalysis.GetTotalInterfaceEndpointMonthlyCost()
-			b.WriteString(fmt.Sprintf("\n  Total Interface Endpoint Cost: $%.2f/month\n", totalCost))
+			b.WriteString(fmt.Sprintf("\n  Total Interface Endpoint Cost: %s/month\n", formatCurrency(totalCost)))
 			b.WriteString(infoStyle.Render("  💡 Interface endpoints cost $0.01/hour + $0.01/GB data processed\n"))
 			b.WriteString(infoStyle.Render("  💡 Review unused endpoints to reduce costs\n"))
 			b.WriteString("\n")
@@ -466,26 +545,26 @@ func (m *deepScanModel) renderFinalReport() string {
 		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
 
 		b.WriteString(infoStyle.Render(fmt.Sprintf("Sample period: %d minutes\n\n", m.duration)))
-		b.WriteString(fmt.Sprintf("Total Traffic: %d records, %.2f MB\n\n",
-			m.trafficStats.TotalRecords, float64(m.trafficStats.TotalBytes)/(1024*1024)))
+		b.WriteString(fmt.Sprintf("Total Traffic: %d records, %.2f GB\n\n",
+			m.trafficStats.TotalRecords, float64(m.trafficStats.TotalBytes)/(1024*1024*1024)))
 
 		b.WriteString(stepStyle.Render("Traffic by Service:\n"))
 		b.WriteString(fmt.Sprintf("  %-12s %10s %10s\n", "Service", "Data", "Percentage"))
 		b.WriteString(fmt.Sprintf("  %-12s %10s %10s\n", "───────────", "─────────", "──────────"))
-		b.WriteString(fmt.Sprintf("  %-12s %9.2f MB %9.1f%%\n", "S3",
-			float64(m.trafficStats.S3Bytes)/(1024*1024), m.trafficStats.S3Percentage()))
-		b.WriteString(fmt.Sprintf("  %-12s %9.2f MB %9.1f%%\n", "DynamoDB",
-			float64(m.trafficStats.DynamoBytes)/(1024*1024), m.trafficStats.DynamoPercentage()))
-		b.WriteString(fmt.Sprintf("  %-12s %9.2f MB %9.1f%%\n", "ECR",
-			float64(m.trafficStats.ECRBytes)/(1024*1024), m.trafficStats.ECRPercentage()))
-		b.WriteString(fmt.Sprintf("  %-12s %9.2f MB %9.1f%%\n\n", "Other",
-			float64(m.trafficStats.OtherBytes)/(1024*1024), m.trafficStats.OtherPercentage()))
+		b.WriteString(fmt.Sprintf("  %-12s %9.2f GB %9.1f%%\n", "S3",
+			float64(m.trafficStats.S3Bytes)/(1024*1024*1024), m.trafficStats.S3Percentage()))
+		b.WriteString(fmt.Sprintf("  %-12s %9.2f GB %9.1f%%\n", "DynamoDB",
+			float64(m.trafficStats.DynamoBytes)/(1024*1024*1024), m.trafficStats.DynamoPercentage()))
+		b.WriteString(fmt.Sprintf("  %-12s %9.2f GB %9.1f%%\n", "ECR",
+			float64(m.trafficStats.ECRBytes)/(1024*1024*1024), m.trafficStats.ECRPercentage()))
+		b.WriteString(fmt.Sprintf("  %-12s %9.2f GB %9.1f%%\n\n", "Other",
+			float64(m.trafficStats.OtherBytes)/(1024*1024*1024), m.trafficStats.OtherPercentage()))
 
 		if len(m.trafficStats.SourceIPs) > 0 {
 			b.WriteString(stepStyle.Render("Top Source IPs:\n"))
 			for _, entry := range m.trafficStats.TopSourceIPs(10) {
-				b.WriteString(fmt.Sprintf("  • %s: %.2f MB (%d records)\n", entry.IP,
-					float64(entry.Stats.Bytes)/(1024*1024), entry.Stats.Records))
+				b.WriteString(fmt.Sprintf("  • %s: %.2f GB (%d records)\n", entry.IP,
+					float64(entry.Stats.Bytes)/(1024*1024*1024), entry.Stats.Records))
 			}
 			if len(m.trafficStats.SourceIPs) > 10 {
 				b.WriteString(fmt.Sprintf("  ... and %d more sources\n", len(m.trafficStats.SourceIPs)-10))
@@ -503,12 +582,12 @@ func (m *deepScanModel) renderFinalReport() string {
 		b.WriteString(warningStyle.Render(fmt.Sprintf("⚠️  Projected from %d-minute sample to monthly estimate\n\n", m.duration)))
 		b.WriteString(fmt.Sprintf("NAT Gateway Data Processing: $%.4f per GB\n\n", m.costEstimate.NATGatewayPricePerGB))
 		b.WriteString(stepStyle.Render("Projected Monthly Costs:\n"))
-		b.WriteString(fmt.Sprintf("  Current NAT Gateway cost:     $%.2f/month\n", m.costEstimate.CurrentMonthlyCost))
-		b.WriteString(fmt.Sprintf("  Potential S3 savings:         $%.2f/month\n", m.costEstimate.S3SavingsMonthly))
-		b.WriteString(fmt.Sprintf("  Potential DynamoDB savings:   $%.2f/month\n", m.costEstimate.DynamoSavingsMonthly))
+		b.WriteString(fmt.Sprintf("  Current NAT Gateway cost:     %s/month\n", formatCurrency(m.costEstimate.CurrentMonthlyCost)))
+		b.WriteString(fmt.Sprintf("  Potential S3 savings:         %s/month\n", formatCurrency(m.costEstimate.S3SavingsMonthly)))
+		b.WriteString(fmt.Sprintf("  Potential DynamoDB savings:   %s/month\n", formatCurrency(m.costEstimate.DynamoSavingsMonthly)))
 		b.WriteString("  ─────────────────────────────────────────\n")
-		b.WriteString(highlightStyle.Render(fmt.Sprintf("  TOTAL POTENTIAL SAVINGS:      $%.2f/month ($%.2f/year)\n\n",
-			m.costEstimate.TotalSavingsMonthly, m.costEstimate.TotalSavingsMonthly*12)))
+		b.WriteString(highlightStyle.Render(fmt.Sprintf("  TOTAL POTENTIAL SAVINGS:      %s/month (%s/year)\n\n",
+			formatCurrency(m.costEstimate.TotalSavingsMonthly), formatCurrency(m.costEstimate.TotalSavingsMonthly*12))))
 
 		b.WriteString(infoStyle.Render("Note: Actual costs depend on real traffic patterns. Run longer\n"))
 		b.WriteString(infoStyle.Render("scans during peak hours for more accurate estimates.\n\n"))
@@ -624,12 +703,18 @@ func (m *deepScanModel) discoverNATs() tea.Msg {
 }
 
 func (m *deepScanModel) createFlowLogs() tea.Msg {
+	// Use dynamic account ID from scanner
+	roleARN := fmt.Sprintf("arn:aws:iam::%s:role/termiNATor-FlowLogsRole", m.accountID)
+
+	// Validate IAM role exists before proceeding
+	if err := m.scanner.ValidateFlowLogsRole(m.ctx, roleARN); err != nil {
+		return deepScanErrorMsg{err: err}
+	}
+
 	if err := m.scanner.CreateLogGroup(m.ctx, m.logGroupName); err != nil {
 		return deepScanErrorMsg{err: fmt.Errorf("failed to create log group: %w", err)}
 	}
 
-	// Use dynamic account ID from scanner
-	roleARN := fmt.Sprintf("arn:aws:iam::%s:role/termiNATor-FlowLogsRole", m.accountID)
 	var flowLogIDs []string
 	for _, nat := range m.nats {
 		flowLogID, err := m.scanner.CreateFlowLogs(m.ctx, nat, m.logGroupName, roleARN, m.runID)
@@ -664,13 +749,24 @@ func (m *deepScanModel) analyzeTraffic() tea.Msg {
 
 	costEstimate := m.scanner.CalculateCosts(stats, m.duration)
 
-	// Analyze VPC endpoints
+	// Analyze VPC endpoints for the deep scanned VPC
 	var endpointAnalysis *analysis.EndpointAnalysis
+	var deepScannedVPC string
 	if len(m.nats) > 0 {
-		endpointAnalysis, _ = m.scanner.AnalyzeVPCEndpoints(m.ctx, m.nats[0].VPCID)
+		deepScannedVPC = m.nats[0].VPCID
+		endpointAnalysis, _ = m.scanner.AnalyzeVPCEndpoints(m.ctx, deepScannedVPC)
 	}
 
-	return trafficAnalyzedMsg{stats: stats, cost: costEstimate, endpointAnalysis: endpointAnalysis}
+	// Run quick scan analysis on ALL VPCs (not just the deep scanned one)
+	allFindings := analysis.AnalyzeAllVPCEndpoints(m.ctx, m.scanner, m.nats)
+
+	return trafficAnalyzedMsg{
+		stats:            stats,
+		cost:             costEstimate,
+		endpointAnalysis: endpointAnalysis,
+		allFindings:      allFindings,
+		deepScannedVPC:   deepScannedVPC,
+	}
 }
 
 func (m *deepScanModel) stopFlowLogs() tea.Msg {
@@ -694,6 +790,12 @@ func formatDuration(d time.Duration) string {
 	m := d / time.Minute
 	s := (d % time.Minute) / time.Second
 	return fmt.Sprintf("%02d:%02d", m, s)
+}
+
+// formatCurrency formats a float as currency with commas (e.g., $1,234.56)
+func formatCurrency(amount float64) string {
+	p := message.NewPrinter(language.English)
+	return p.Sprintf("$%,.2f", amount)
 }
 
 var (
