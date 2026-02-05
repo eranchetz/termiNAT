@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# Run gofmt on all Go files
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+    echo "❌ The following files are not formatted:"
+    echo "$unformatted"
+    echo ""
+    echo "Run: gofmt -w ."
+    exit 1
+fi
+
+echo "✅ All Go files are properly formatted"
+exit 0
