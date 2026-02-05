@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "dev"
+var version = "0.4.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "terminat",
@@ -30,5 +30,6 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.Version = version
 	rootCmd.AddCommand(scanCmd)
 }
