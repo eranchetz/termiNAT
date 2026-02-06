@@ -44,42 +44,46 @@ const (
 )
 
 type deepScanModel struct {
-	scanner          *core.Scanner
-	ctx              context.Context
-	duration         int
-	natIDs           []string
-	autoApprove      bool
-	autoCleanup      bool
-	spinner          spinner.Model
-	phase            phase
-	step             string
-	nats             []types.NATGateway
-	flowLogIDs       []string
-	logGroupName     string
-	runID            string
-	trafficStats     *analysis.TrafficStats
-	costEstimate     *analysis.CostEstimate
-	endpointAnalysis *analysis.EndpointAnalysis
-	allFindings      []types.Finding // Quick scan findings for ALL VPCs
-	deepScannedVPC   string          // VPC that was deep scanned
-	recommendations  []analysis.Recommendation
-	region           string
-	accountID        string
-	err              error
-	done             bool
-	startTime        time.Time
-	phaseStartTime   time.Time
-	tipIndex         int
-	flowLogsStopped  bool
-	exportMsg        string
-	exportFormat     string
-	outputFile       string
+	scanner              *core.Scanner
+	ctx                  context.Context
+	duration             int
+	natIDs               []string
+	autoApprove          bool
+	autoCleanup          bool
+	spinner              spinner.Model
+	phase                phase
+	step                 string
+	nats                 []types.NATGateway
+	flowLogIDs           []string
+	logGroupName         string
+	runID                string
+	trafficStats         *analysis.TrafficStats
+	costEstimate         *analysis.CostEstimate
+	endpointAnalysis     *analysis.EndpointAnalysis
+	allFindings          []types.Finding // Quick scan findings for ALL VPCs
+	deepScannedVPC       string          // VPC that was deep scanned
+	recommendations      []analysis.Recommendation
+	region               string
+	accountID            string
+	estimatedScanCostGB  float64
+	estimatedScanCostUSD float64
+	err                  error
+	done                 bool
+	startTime            time.Time
+	phaseStartTime       time.Time
+	tipIndex             int
+	flowLogsStopped      bool
+	exportMsg            string
+	exportFormat         string
+	outputFile           string
 }
 
 type tickMsg time.Time
 type deepNatsDiscoveredMsg struct {
 	nats            []types.NATGateway
 	recommendations []analysis.Recommendation
+	estGB           float64
+	estCost         float64
 }
 type flowLogsCreatedMsg struct{ flowLogIDs []string }
 type collectionCompleteMsg struct{}
@@ -250,6 +254,8 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case deepNatsDiscoveredMsg:
 		m.nats = msg.nats
 		m.recommendations = msg.recommendations
+		m.estimatedScanCostGB = msg.estGB
+		m.estimatedScanCostUSD = msg.estCost
 		if m.autoApprove {
 			m.phase = phaseCreatingResources
 			return m, m.createFlowLogs
@@ -359,9 +365,15 @@ func (m *deepScanModel) renderApprovalPrompt() string {
 	b.WriteString(infoStyle.Render("   → You'll be asked whether to keep or delete after scan\n"))
 
 	b.WriteString(stepStyle.Render("\n📊 Estimated Costs:\n"))
-	b.WriteString("   • Flow Logs ingestion: ~$0.50 per GB\n")
-	b.WriteString("   • CloudWatch Logs storage: ~$0.03 per GB/month\n")
-	b.WriteString("   • For a 5-minute scan, typical cost: < $0.10\n")
+	if m.estimatedScanCostGB > 0 {
+		b.WriteString(fmt.Sprintf("   • Estimated flow log data: ~%.2f GB (based on current NAT throughput)\n", m.estimatedScanCostGB))
+		b.WriteString(fmt.Sprintf("   • Flow Logs ingestion (~$0.50/GB): ~$%.2f\n", m.estimatedScanCostUSD))
+		b.WriteString(fmt.Sprintf("   • CloudWatch storage (~$0.03/GB/month): ~$%.4f/month\n", m.estimatedScanCostGB*0.03))
+	} else {
+		b.WriteString("   • Flow Logs ingestion: ~$0.50 per GB\n")
+		b.WriteString("   • CloudWatch Logs storage: ~$0.03 per GB/month\n")
+		b.WriteString("   • For a 5-minute scan, typical cost: < $0.10\n")
+	}
 
 	b.WriteString(stepStyle.Render(fmt.Sprintf("\n⏱️  Total scan time: %d minutes\n", m.duration+5)))
 	b.WriteString("   • 5 min startup delay (Flow Logs initialization)\n")
@@ -699,7 +711,14 @@ func (m *deepScanModel) discoverNATs() tea.Msg {
 	// Generate recommendations based on NAT Gateway setup
 	recommendations := analysis.AnalyzeNATGatewaySetup(nats)
 
-	return deepNatsDiscoveredMsg{nats: nats, recommendations: recommendations}
+	// Estimate scan cost from recent NAT throughput
+	var natIDs []string
+	for _, nat := range nats {
+		natIDs = append(natIDs, nat.ID)
+	}
+	estGB, estCost, _ := m.scanner.EstimateFlowLogsCost(m.ctx, natIDs, m.duration)
+
+	return deepNatsDiscoveredMsg{nats: nats, recommendations: recommendations, estGB: estGB, estCost: estCost}
 }
 
 func (m *deepScanModel) createFlowLogs() tea.Msg {

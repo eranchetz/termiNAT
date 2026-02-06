@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
+	cloudwatchtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -23,6 +26,7 @@ type Scanner struct {
 	ec2Client *aws.EC2Client
 	cwlClient *aws.CloudWatchLogsClient
 	iamClient *iam.Client
+	cwClient  *cloudwatch.Client
 }
 
 // NewScanner creates a new scanner instance
@@ -61,6 +65,7 @@ func NewScanner(ctx context.Context, region, profile string) (*Scanner, error) {
 		ec2Client: aws.NewEC2Client(ec2.NewFromConfig(cfg)),
 		cwlClient: aws.NewCloudWatchLogsClient(cloudwatchlogs.NewFromConfig(cfg)),
 		iamClient: iam.NewFromConfig(cfg),
+		cwClient:  cloudwatch.NewFromConfig(cfg),
 	}, nil
 }
 
@@ -97,7 +102,10 @@ func (s *Scanner) ValidateFlowLogsRole(ctx context.Context, roleARN string) erro
 		return fmt.Errorf("IAM role '%s' trust policy does not allow vpc-flow-logs.amazonaws.com. Run: ./scripts/setup-flowlogs-role.sh", roleName)
 	}
 
-	// Check for CloudWatch Logs permissions
+	// Check for CloudWatch Logs permissions (both attached and inline policies)
+	hasCloudWatchPolicy := false
+
+	// Check attached policies
 	policiesResp, err := s.iamClient.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
 		RoleName: &roleName,
 	})
@@ -105,12 +113,29 @@ func (s *Scanner) ValidateFlowLogsRole(ctx context.Context, roleARN string) erro
 		return fmt.Errorf("failed to list role policies: %w", err)
 	}
 
-	hasCloudWatchPolicy := false
 	for _, policy := range policiesResp.AttachedPolicies {
 		if strings.Contains(*policy.PolicyName, "CloudWatchLogs") ||
 			strings.Contains(*policy.PolicyName, "FlowLogs") {
 			hasCloudWatchPolicy = true
 			break
+		}
+	}
+
+	// Check inline policies if not found in attached
+	if !hasCloudWatchPolicy {
+		inlinePoliciesResp, err := s.iamClient.ListRolePolicies(ctx, &iam.ListRolePoliciesInput{
+			RoleName: &roleName,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to list inline policies: %w", err)
+		}
+
+		for _, policyName := range inlinePoliciesResp.PolicyNames {
+			if strings.Contains(policyName, "CloudWatchLogs") ||
+				strings.Contains(policyName, "FlowLogs") {
+				hasCloudWatchPolicy = true
+				break
+			}
 		}
 	}
 
@@ -213,3 +238,50 @@ func (s *Scanner) AnalyzeTraffic(ctx context.Context, logGroupName string, start
 func (s *Scanner) CalculateCosts(stats *analysis.TrafficStats, collectionMinutes int) *analysis.CostEstimate {
 	return analysis.CalculateCosts(s.region, stats, collectionMinutes)
 }
+
+// EstimateFlowLogsCost estimates the CloudWatch Logs ingestion cost for a deep scan
+// by querying recent NAT Gateway throughput from CloudWatch metrics.
+// Returns estimated GB of flow log data and cost in USD, or (0, 0, err) on failure.
+func (s *Scanner) EstimateFlowLogsCost(ctx context.Context, natIDs []string, durationMinutes int) (estimatedGB float64, estimatedCost float64, err error) {
+	now := time.Now()
+	startTime := now.Add(-1 * time.Hour)
+
+	var totalBytes float64
+	for _, natID := range natIDs {
+		for _, metricName := range []string{"BytesOutToDestination", "BytesInFromDestination"} {
+			result, err := s.cwClient.GetMetricStatistics(ctx, &cloudwatch.GetMetricStatisticsInput{
+				Namespace:  strPtr("AWS/NATGateway"),
+				MetricName: strPtr(metricName),
+				Dimensions: []cloudwatchtypes.Dimension{
+					{Name: strPtr("NatGatewayId"), Value: strPtr(natID)},
+				},
+				StartTime:  &startTime,
+				EndTime:    &now,
+				Period:     int32Ptr(3600),
+				Statistics: []cloudwatchtypes.Statistic{cloudwatchtypes.StatisticSum},
+			})
+			if err != nil {
+				return 0, 0, fmt.Errorf("failed to get NAT metrics: %w", err)
+			}
+			for _, dp := range result.Datapoints {
+				if dp.Sum != nil {
+					totalBytes += *dp.Sum
+				}
+			}
+		}
+	}
+
+	// Extrapolate: bytes in last hour → bytes during scan duration
+	// Flow Logs generate ~40-50 bytes per record, roughly 1:1 ratio with actual traffic bytes
+	// but we use a conservative 0.5x multiplier since flow log records are smaller than payload
+	bytesPerHour := totalBytes
+	scanHours := float64(durationMinutes+5) / 60.0 // include 5-min startup
+	estimatedFlowLogBytes := bytesPerHour * scanHours * 0.5
+	estimatedGB = estimatedFlowLogBytes / (1024 * 1024 * 1024)
+	estimatedCost = estimatedGB * 0.50 // $0.50/GB ingestion
+
+	return estimatedGB, estimatedCost, nil
+}
+
+func strPtr(s string) *string { return &s }
+func int32Ptr(i int32) *int32 { return &i }
