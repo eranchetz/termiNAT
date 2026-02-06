@@ -8,6 +8,24 @@ import (
 	"github.com/doitintl/terminator/pkg/types"
 )
 
+// shellQuote wraps a string in single quotes for safe shell usage.
+// Single quotes inside the value are escaped as '\” (end quote, escaped quote, start quote).
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// sanitizeForDisplay strips control characters (ASCII 0-31 except newline/tab) from a string
+// to prevent ANSI escape sequence injection in terminal output.
+func sanitizeForDisplay(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == '\n' || r == '\t' || r >= 32 {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // EndpointAnalysis contains VPC endpoint configuration analysis
 type EndpointAnalysis struct {
 	VPCID              string
@@ -74,7 +92,7 @@ func AnalyzeEndpoints(region string, vpcID string, endpoints []types.VPCEndpoint
 
 	// Check route tables for missing routes
 	for _, rt := range routeTables {
-		rtName := rt.Tags["Name"]
+		rtName := sanitizeForDisplay(rt.Tags["Name"])
 		if rtName == "" {
 			rtName = rt.ID
 		}
@@ -186,11 +204,15 @@ func (a *EndpointAnalysis) GetCreateEndpointCommands() []string {
 			}
 		}
 	}
-	rtIDsStr := strings.Join(rtIDs, " ")
+	var quotedRTIDs []string
+	for _, id := range rtIDs {
+		quotedRTIDs = append(quotedRTIDs, shellQuote(id))
+	}
+	rtIDsStr := strings.Join(quotedRTIDs, " ")
 
 	for _, svc := range a.MissingEndpoints {
 		cmd := fmt.Sprintf("aws ec2 create-vpc-endpoint \\\n  --vpc-id %s \\\n  --service-name %s \\\n  --route-table-ids %s",
-			a.VPCID, svc, rtIDsStr)
+			shellQuote(a.VPCID), shellQuote(svc), rtIDsStr)
 		commands = append(commands, cmd)
 	}
 
@@ -212,7 +234,7 @@ func (a *EndpointAnalysis) GetAddRouteCommands() []string {
 		}
 
 		cmd := fmt.Sprintf("aws ec2 modify-vpc-endpoint \\\n  --vpc-endpoint-id %s \\\n  --add-route-table-ids %s",
-			endpointID, mr.RouteTableID)
+			shellQuote(endpointID), shellQuote(mr.RouteTableID))
 		commands = append(commands, cmd)
 	}
 

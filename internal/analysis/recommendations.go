@@ -62,7 +62,7 @@ func AnalyzeNATGatewaySetup(nats []pkgtypes.NATGateway) []Recommendation {
 				Commands: []string{
 					fmt.Sprintf("# Create Regional NAT Gateway for VPC %s", vpcID),
 					fmt.Sprintf("aws ec2 create-nat-gateway \\"),
-					fmt.Sprintf("  --vpc-id %s \\", vpcID),
+					fmt.Sprintf("  --vpc-id %s \\", shellQuote(vpcID)),
 					"  --availability-mode regional \\",
 					"  --connectivity-type public",
 					"",
