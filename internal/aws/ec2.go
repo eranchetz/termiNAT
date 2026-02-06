@@ -121,6 +121,7 @@ func (c *EC2Client) DiscoverVPCEndpoints(ctx context.Context, vpcID string) ([]p
 			Type:        string(ep.VpcEndpointType),
 			State:       string(ep.State),
 			RouteTables: ep.RouteTableIds,
+			SubnetIDs:   ep.SubnetIds,
 			PrivateDNS:  ep.PrivateDnsEnabled != nil && *ep.PrivateDnsEnabled,
 			Tags:        tags,
 		}

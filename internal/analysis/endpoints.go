@@ -230,9 +230,10 @@ func (a *EndpointAnalysis) GetInterfaceEndpointCosts() []InterfaceEndpointCost {
 		parts := strings.Split(ep.ServiceName, ".")
 		serviceName := parts[len(parts)-1]
 
-		// Assume 1 AZ per endpoint (conservative estimate)
-		// In reality, we'd need to check subnet associations
-		azCount := 1
+		azCount := len(ep.SubnetIDs)
+		if azCount == 0 {
+			azCount = 1 // Fallback for Gateway endpoints or missing data
+		}
 
 		hourlyCost := 0.01 * float64(azCount)
 		monthlyCost := hourlyCost * 24 * 30

@@ -22,6 +22,7 @@ type VPCEndpoint struct {
 	Type        string // "Gateway" or "Interface"
 	State       string
 	RouteTables []string
+	SubnetIDs   []string // Subnets = AZs for Interface endpoints
 	PrivateDNS  bool
 	Tags        map[string]string
 }
