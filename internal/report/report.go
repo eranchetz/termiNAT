@@ -119,6 +119,10 @@ func (r *Report) ToMarkdown() string {
 		b.WriteString(fmt.Sprintf("| Current NAT Gateway Cost | $%.2f/month |\n", r.CostEstimate.CurrentMonthlyCost))
 		b.WriteString(fmt.Sprintf("| S3 Endpoint Savings | $%.2f/month |\n", r.CostEstimate.S3SavingsMonthly))
 		b.WriteString(fmt.Sprintf("| DynamoDB Endpoint Savings | $%.2f/month |\n", r.CostEstimate.DynamoSavingsMonthly))
+		if r.TrafficStats != nil && r.TrafficStats.ECRBytes > 0 && r.CostEstimate.OtherPercentage() > 0 {
+			ecrCost := r.CostEstimate.OtherDataGB * r.CostEstimate.NATGatewayPricePerGB * (r.TrafficStats.ECRPercentage() / r.CostEstimate.OtherPercentage())
+			b.WriteString(fmt.Sprintf("| ECR Traffic Cost (no free endpoint) | $%.2f/month |\n", ecrCost))
+		}
 		b.WriteString(fmt.Sprintf("| **Total Potential Savings** | **$%.2f/month** |\n\n", r.CostEstimate.TotalSavingsMonthly))
 	}
 

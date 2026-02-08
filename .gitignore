@@ -45,3 +45,7 @@ config
 # Build artifacts
 dist/
 build/
+
+# Temp report exports
+terminator-report-*.json
+terminator-report-*.md
