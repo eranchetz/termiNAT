@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/doitintl/terminator/internal/analysis"
 	"github.com/doitintl/terminator/internal/core"
+	"github.com/doitintl/terminator/internal/datahub"
 	"github.com/doitintl/terminator/internal/report"
 	"github.com/doitintl/terminator/pkg/types"
 	"golang.org/x/text/language"
@@ -34,6 +36,7 @@ type phase int
 const (
 	phaseInit phase = iota
 	phaseDiscovering
+	phaseSelectingNATs
 	phaseAwaitingApproval
 	phaseCreatingResources
 	phaseWaitingStartup
@@ -48,6 +51,7 @@ type deepScanModel struct {
 	ctx                  context.Context
 	duration             int
 	natIDs               []string
+	vpcID                string
 	autoApprove          bool
 	autoCleanup          bool
 	spinner              spinner.Model
@@ -76,6 +80,15 @@ type deepScanModel struct {
 	exportMsg            string
 	exportFormat         string
 	outputFile           string
+	datahubAPIKey        string
+	datahubCustomerCtx   string
+	datahubMsg           string
+	datahubInputBuf      string
+	datahubPhase         int // 0=none, 1=prompting-key, 2=prompting-context, 3=prompting-save, 4=sending
+	viewport             viewport.Model
+	viewportReady        bool
+	natCursor            int
+	natSelected          map[int]bool
 }
 
 type tickMsg time.Time
@@ -97,28 +110,32 @@ type trafficAnalyzedMsg struct {
 type flowLogsStoppedMsg struct{}
 type deepScanErrorMsg struct{ err error }
 type deepScanCompleteMsg struct{}
+type datahubResultMsg struct{ err error }
 
-func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, autoApprove, autoCleanup bool, exportFormat, outputFile string) error {
+func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, vpcID string, autoApprove, autoCleanup bool, exportFormat, outputFile string, datahubAPIKey, datahubCustomerCtx string) error {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4"))
 
 	m := &deepScanModel{
-		scanner:      scanner,
-		ctx:          ctx,
-		duration:     duration,
-		natIDs:       natIDs,
-		autoApprove:  autoApprove,
-		autoCleanup:  autoCleanup,
-		spinner:      s,
-		phase:        phaseInit,
-		region:       region,
-		accountID:    scanner.GetAccountID(),
-		runID:        fmt.Sprintf("terminat-%d", time.Now().Unix()),
-		logGroupName: fmt.Sprintf("/aws/vpc/flowlogs/terminat-%d", time.Now().Unix()),
-		startTime:    time.Now(),
-		exportFormat: exportFormat,
-		outputFile:   outputFile,
+		scanner:            scanner,
+		ctx:                ctx,
+		duration:           duration,
+		natIDs:             natIDs,
+		vpcID:              vpcID,
+		autoApprove:        autoApprove,
+		autoCleanup:        autoCleanup,
+		spinner:            s,
+		phase:              phaseInit,
+		region:             region,
+		accountID:          scanner.GetAccountID(),
+		runID:              fmt.Sprintf("terminat-%d", time.Now().Unix()),
+		logGroupName:       fmt.Sprintf("/aws/vpc/flowlogs/terminat-%d", time.Now().Unix()),
+		startTime:          time.Now(),
+		exportFormat:       exportFormat,
+		outputFile:         outputFile,
+		datahubAPIKey:      datahub.ResolveAPIKey(datahubAPIKey),
+		datahubCustomerCtx: datahub.ResolveCustomerContext(datahubCustomerCtx),
 	}
 
 	// Set up signal handler for cleanup on interrupt
@@ -132,7 +149,7 @@ func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, dura
 	}()
 	defer signal.Stop(sigChan)
 
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		m.cleanupFlowLogs()
 		return err
@@ -190,7 +207,24 @@ func (m *deepScanModel) exportReport(format string) {
 	}
 }
 
+func (m *deepScanModel) sendToDataHub() tea.Msg {
+	events := datahub.BuildEvents(m.accountID, m.region, m.nats, m.trafficStats, m.costEstimate, m.endpointAnalysis)
+	err := datahub.Send(m.datahubAPIKey, m.datahubCustomerCtx, events)
+	return datahubResultMsg{err: err}
+}
+
+func (m *deepScanModel) enterPhaseDone() {
+	m.phase = phaseDone
+	if m.viewportReady {
+		m.viewport.SetContent(m.renderReportBody())
+		m.viewport.GotoTop()
+	}
+}
+
 func (m *deepScanModel) Init() tea.Cmd {
+	if m.phase == phaseDone {
+		return nil
+	}
 	return tea.Batch(m.spinner.Tick, m.tick(), m.discoverNATs)
 }
 
@@ -205,6 +239,49 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			m.cleanupFlowLogs()
 			return m, tea.Quit
+		}
+
+		// NAT selection phase key handlers
+		if m.phase == phaseSelectingNATs {
+			switch msg.String() {
+			case "up", "k":
+				if m.natCursor > 0 {
+					m.natCursor--
+				}
+			case "down", "j":
+				if m.natCursor < len(m.nats)-1 {
+					m.natCursor++
+				}
+			case " ":
+				m.natSelected[m.natCursor] = !m.natSelected[m.natCursor]
+			case "a":
+				allSelected := true
+				for i := range m.nats {
+					if !m.natSelected[i] {
+						allSelected = false
+						break
+					}
+				}
+				for i := range m.nats {
+					m.natSelected[i] = !allSelected
+				}
+			case "enter":
+				selected := []types.NATGateway{}
+				for i, nat := range m.nats {
+					if m.natSelected[i] {
+						selected = append(selected, nat)
+					}
+				}
+				if len(selected) == 0 {
+					return m, nil // don't proceed with nothing selected
+				}
+				m.nats = selected
+				m.phase = phaseAwaitingApproval
+			}
+			return m, nil
+		}
+
+		switch msg.String() {
 		case "y", "Y":
 			if m.phase == phaseAwaitingApproval {
 				m.phase = phaseCreatingResources
@@ -223,23 +300,103 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.exportFormat != "" {
 					m.exportReport(m.exportFormat)
 				}
-				m.phase = phaseDone
+				m.enterPhaseDone()
 				return m, nil
 			}
 		case "m", "M":
-			if m.phase == phaseDone {
+			if m.phase == phaseDone && m.datahubPhase == 0 {
 				m.exportReport("markdown")
 				return m, nil
 			}
 		case "j", "J":
-			if m.phase == phaseDone {
+			if m.phase == phaseDone && m.datahubPhase == 0 {
 				m.exportReport("json")
 				return m, nil
 			}
+		case "d", "D":
+			if m.phase == phaseDone && m.datahubPhase == 0 {
+				if m.datahubAPIKey != "" {
+					m.datahubPhase = 4
+					return m, m.sendToDataHub
+				}
+				m.datahubPhase = 1
+				m.datahubInputBuf = ""
+				m.datahubMsg = ""
+				return m, nil
+			}
 		case "enter", " ":
-			if m.phase == phaseDone {
+			if m.phase == phaseDone && m.datahubPhase == 0 {
 				return m, tea.Quit
 			}
+			if m.datahubPhase == 1 {
+				if m.datahubInputBuf == "" {
+					m.datahubPhase = 0
+					m.datahubMsg = "  ✗ No API key provided"
+					return m, nil
+				}
+				m.datahubAPIKey = m.datahubInputBuf
+				m.datahubInputBuf = ""
+				m.datahubPhase = 2
+				return m, nil
+			}
+			if m.datahubPhase == 2 {
+				m.datahubCustomerCtx = m.datahubInputBuf
+				m.datahubInputBuf = ""
+				m.datahubPhase = 4
+				return m, m.sendToDataHub
+			}
+			if m.datahubPhase == 3 {
+				m.datahubPhase = 0
+				return m, nil
+			}
+		case "backspace":
+			if m.datahubPhase == 1 || m.datahubPhase == 2 {
+				if len(m.datahubInputBuf) > 0 {
+					m.datahubInputBuf = m.datahubInputBuf[:len(m.datahubInputBuf)-1]
+				}
+				return m, nil
+			}
+		default:
+			if m.datahubPhase == 1 || m.datahubPhase == 2 {
+				if len(msg.String()) == 1 {
+					m.datahubInputBuf += msg.String()
+				}
+				return m, nil
+			}
+			if m.datahubPhase == 3 {
+				if msg.String() == "n" || msg.String() == "N" {
+					m.datahubPhase = 0
+					return m, nil
+				}
+				if msg.String() == "y" || msg.String() == "Y" {
+					_ = datahub.SaveConfig(datahub.Config{APIKey: m.datahubAPIKey, CustomerContext: m.datahubCustomerCtx})
+					m.datahubMsg += "\n  ✓ Saved to ~/.terminat/config.toml"
+					m.datahubPhase = 0
+					return m, nil
+				}
+			}
+		}
+		// Forward to viewport for scrolling
+		if m.phase == phaseDone && m.viewportReady && m.datahubPhase == 0 {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+
+	case tea.WindowSizeMsg:
+		footerHeight := 6
+		m.viewport = viewport.New(msg.Width, msg.Height-footerHeight)
+		m.viewportReady = true
+		if m.phase == phaseDone {
+			m.viewport.SetContent(m.renderReportBody())
+		}
+		return m, nil
+
+	case tea.MouseMsg:
+		if m.phase == phaseDone && m.viewportReady {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
 		}
 
 	case tickMsg:
@@ -259,6 +416,15 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.autoApprove {
 			m.phase = phaseCreatingResources
 			return m, m.createFlowLogs
+		}
+		// Show interactive selection when multiple NATs and no explicit filter
+		if len(m.nats) > 1 && len(m.natIDs) == 0 {
+			m.natSelected = make(map[int]bool)
+			for i := range m.nats {
+				m.natSelected[i] = true // select all by default
+			}
+			m.phase = phaseSelectingNATs
+			return m, nil
 		}
 		m.phase = phaseAwaitingApproval
 		return m, nil
@@ -304,11 +470,25 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case deepScanCompleteMsg:
-		// Auto-export if --export flag was provided
 		if m.exportFormat != "" {
 			m.exportReport(m.exportFormat)
 		}
-		m.phase = phaseDone
+		m.enterPhaseDone()
+		return m, nil
+
+	case datahubResultMsg:
+		if msg.err != nil {
+			m.datahubMsg = fmt.Sprintf("  ✗ DataHub error: %v", msg.err)
+			m.datahubPhase = 0
+		} else {
+			m.datahubMsg = "  ✓ Sent to DoiT DataHub"
+			cfg := datahub.LoadConfig()
+			if cfg.APIKey != m.datahubAPIKey {
+				m.datahubPhase = 3
+			} else {
+				m.datahubPhase = 0
+			}
+		}
 		return m, nil
 	}
 	return m, nil
@@ -328,6 +508,8 @@ func (m *deepScanModel) View() string {
 	switch m.phase {
 	case phaseInit, phaseDiscovering:
 		b.WriteString(fmt.Sprintf("%s %s\n", m.spinner.View(), "Discovering NAT Gateways..."))
+	case phaseSelectingNATs:
+		b.WriteString(m.renderNATSelection())
 	case phaseAwaitingApproval:
 		b.WriteString(m.renderApprovalPrompt())
 	case phaseCreatingResources:
@@ -339,9 +521,46 @@ func (m *deepScanModel) View() string {
 	case phaseAwaitingCleanup:
 		b.WriteString(m.renderCleanupPrompt())
 	case phaseDone:
-		b.WriteString(m.renderFinalReport())
+		if m.viewportReady {
+			b.WriteString(m.viewport.View())
+			b.WriteString("\n")
+			b.WriteString(m.renderFooter())
+		} else {
+			b.WriteString(m.renderFinalReport())
+		}
 	}
 
+	return b.String()
+}
+
+func (m *deepScanModel) renderNATSelection() string {
+	var b strings.Builder
+	b.WriteString(stepStyle.Render("Select NAT Gateways to deep scan:") + "\n\n")
+
+	// Group by VPC for display
+	for i, nat := range m.nats {
+		cursor := "  "
+		if i == m.natCursor {
+			cursor = highlightStyle.Render("> ")
+		}
+		check := "[ ]"
+		if m.natSelected[i] {
+			check = successStyle.Render("[✓]")
+		}
+		mode := nat.AvailabilityMode
+		if mode == "" {
+			mode = "zonal"
+		}
+		name := nat.Tags["Name"]
+		label := fmt.Sprintf("%s (%s, VPC: %s)", nat.ID, mode, nat.VPCID)
+		if name != "" {
+			label = fmt.Sprintf("%s - %s (%s, VPC: %s)", nat.ID, name, mode, nat.VPCID)
+		}
+		b.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, label))
+	}
+
+	b.WriteString("\n")
+	b.WriteString(tipStyle.Render("↑/↓ move  ␣ toggle  a select all  enter confirm") + "\n")
 	return b.String()
 }
 
@@ -446,251 +665,24 @@ func (m *deepScanModel) renderCleanupPrompt() string {
 	return b.String()
 }
 
-func (m *deepScanModel) renderFinalReport() string {
-	var b strings.Builder
-	b.WriteString(successStyle.Render("✓ Deep Dive Scan Complete\n"))
-	b.WriteString(successStyle.Render("✓ Flow Logs STOPPED\n\n"))
-
-	// NAT Gateway Overview - show which were deep scanned vs config-only
-	b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
-	b.WriteString(stepStyle.Render("                    NAT GATEWAY OVERVIEW\n"))
-	b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
-
-	// Group NATs by VPC
-	vpcNATs := make(map[string][]types.NATGateway)
-	for _, nat := range m.nats {
-		vpcNATs[nat.VPCID] = append(vpcNATs[nat.VPCID], nat)
-	}
-
-	for vpcID, nats := range vpcNATs {
-		isDeepScanned := vpcID == m.deepScannedVPC
-		if isDeepScanned {
-			b.WriteString(highlightStyle.Render(fmt.Sprintf("📊 VPC: %s [DEEP SCANNED - Traffic Analyzed]\n", vpcID)))
-		} else {
-			b.WriteString(infoStyle.Render(fmt.Sprintf("📋 VPC: %s [Config Check Only]\n", vpcID)))
-		}
-		for _, nat := range nats {
-			mode := nat.AvailabilityMode
-			if mode == "" {
-				mode = "zonal"
-			}
-			b.WriteString(fmt.Sprintf("   • %s (%s)\n", nat.ID, mode))
-		}
-		b.WriteString("\n")
-	}
-
-	// Show findings for ALL VPCs (quick scan results)
-	if len(m.allFindings) > 0 {
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
-		b.WriteString(stepStyle.Render("              VPC ENDPOINT ISSUES (All VPCs)\n"))
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
-
-		b.WriteString(warningStyle.Render(fmt.Sprintf("⚠️  Found %d issue(s) across all VPCs:\n\n", len(m.allFindings))))
-		for _, finding := range m.allFindings {
-			b.WriteString(fmt.Sprintf("  [%s] %s\n", strings.ToUpper(finding.Severity), finding.Title))
-			b.WriteString(fmt.Sprintf("      %s\n", finding.Description))
-			b.WriteString(infoStyle.Render(fmt.Sprintf("      → %s\n\n", finding.Action)))
-		}
-	} else {
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
-		b.WriteString(stepStyle.Render("              VPC ENDPOINT STATUS (All VPCs)\n"))
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
-		b.WriteString(successStyle.Render("✓ All VPCs have proper endpoint configuration!\n\n"))
-	}
-
-	// VPC Endpoint Analysis Section for deep scanned VPC (detailed)
-	if m.endpointAnalysis != nil {
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
-		b.WriteString(stepStyle.Render("         DETAILED ENDPOINT CONFIG (Deep Scanned VPC)\n"))
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
-
-		b.WriteString(fmt.Sprintf("VPC: %s\n\n", m.endpointAnalysis.VPCID))
-
-		// Endpoint status
-		b.WriteString(stepStyle.Render("Gateway Endpoints:\n"))
-		if m.endpointAnalysis.S3Endpoint != nil {
-			b.WriteString(fmt.Sprintf("  ✓ S3: %s (%d route tables)\n",
-				m.endpointAnalysis.S3Endpoint.ID, len(m.endpointAnalysis.S3Endpoint.RouteTables)))
-		} else {
-			b.WriteString(warningStyle.Render("  ✗ S3: NOT CONFIGURED\n"))
-		}
-		if m.endpointAnalysis.DynamoEndpoint != nil {
-			b.WriteString(fmt.Sprintf("  ✓ DynamoDB: %s (%d route tables)\n",
-				m.endpointAnalysis.DynamoEndpoint.ID, len(m.endpointAnalysis.DynamoEndpoint.RouteTables)))
-		} else {
-			b.WriteString(warningStyle.Render("  ✗ DynamoDB: NOT CONFIGURED\n"))
-		}
-		b.WriteString("\n")
-
-		// Missing routes
-		if len(m.endpointAnalysis.MissingRoutes) > 0 {
-			b.WriteString(warningStyle.Render("Route Tables Missing Endpoint Routes:\n"))
-			for _, mr := range m.endpointAnalysis.MissingRoutes {
-				b.WriteString(fmt.Sprintf("  • %s: missing %s route\n", mr.RouteTableID, mr.Service))
-			}
-			b.WriteString("\n")
-		}
-
-		// Interface Endpoints
-		if m.endpointAnalysis.HasInterfaceEndpoints() {
-			b.WriteString(stepStyle.Render("Interface Endpoints:\n"))
-			costs := m.endpointAnalysis.GetInterfaceEndpointCosts()
-			for _, c := range costs {
-				name := c.Endpoint.Tags["Name"]
-				if name == "" {
-					name = c.Endpoint.ID
-				}
-				b.WriteString(fmt.Sprintf("  • %s (%s): %s/month\n", c.ServiceName, name, formatCurrency(c.MonthlyCost)))
-			}
-			totalCost := m.endpointAnalysis.GetTotalInterfaceEndpointMonthlyCost()
-			b.WriteString(fmt.Sprintf("\n  Total Interface Endpoint Cost: %s/month\n", formatCurrency(totalCost)))
-			b.WriteString(infoStyle.Render("  💡 Interface endpoints cost $0.01/hour + $0.01/GB data processed\n"))
-			b.WriteString(infoStyle.Render("  💡 Review unused endpoints to reduce costs\n"))
-			b.WriteString("\n")
-		}
-	}
-
-	// Traffic Analysis
-	if m.trafficStats != nil && m.trafficStats.TotalRecords > 0 {
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
-		b.WriteString(stepStyle.Render("                 COLLECTED TRAFFIC SAMPLE\n"))
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
-
-		b.WriteString(infoStyle.Render(fmt.Sprintf("Sample period: %d minutes\n\n", m.duration)))
-		b.WriteString(fmt.Sprintf("Total Traffic: %d records, %.2f GB\n\n",
-			m.trafficStats.TotalRecords, float64(m.trafficStats.TotalBytes)/(1024*1024*1024)))
-
-		b.WriteString(stepStyle.Render("Traffic by Service:\n"))
-		b.WriteString(fmt.Sprintf("  %-12s %10s %10s\n", "Service", "Data", "Percentage"))
-		b.WriteString(fmt.Sprintf("  %-12s %10s %10s\n", "───────────", "─────────", "──────────"))
-		b.WriteString(fmt.Sprintf("  %-12s %9.2f GB %9.1f%%\n", "S3",
-			float64(m.trafficStats.S3Bytes)/(1024*1024*1024), m.trafficStats.S3Percentage()))
-		b.WriteString(fmt.Sprintf("  %-12s %9.2f GB %9.1f%%\n", "DynamoDB",
-			float64(m.trafficStats.DynamoBytes)/(1024*1024*1024), m.trafficStats.DynamoPercentage()))
-		b.WriteString(fmt.Sprintf("  %-12s %9.2f GB %9.1f%%\n", "ECR",
-			float64(m.trafficStats.ECRBytes)/(1024*1024*1024), m.trafficStats.ECRPercentage()))
-		b.WriteString(fmt.Sprintf("  %-12s %9.2f GB %9.1f%%\n\n", "Other",
-			float64(m.trafficStats.OtherBytes)/(1024*1024*1024), m.trafficStats.OtherPercentage()))
-
-		if len(m.trafficStats.SourceIPs) > 0 {
-			b.WriteString(stepStyle.Render("Top Source IPs:\n"))
-			for _, entry := range m.trafficStats.TopSourceIPs(10) {
-				b.WriteString(fmt.Sprintf("  • %s: %.2f GB (%d records)\n", entry.IP,
-					float64(entry.Stats.Bytes)/(1024*1024*1024), entry.Stats.Records))
-			}
-			if len(m.trafficStats.SourceIPs) > 10 {
-				b.WriteString(fmt.Sprintf("  ... and %d more sources\n", len(m.trafficStats.SourceIPs)-10))
-			}
-			b.WriteString("\n")
-		}
-	}
-
-	// Cost Estimate
-	if m.costEstimate != nil {
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
-		b.WriteString(stepStyle.Render("                      COST ESTIMATE\n"))
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
-
-		b.WriteString(warningStyle.Render(fmt.Sprintf("⚠️  Projected from %d-minute sample to monthly estimate\n\n", m.duration)))
-		b.WriteString(fmt.Sprintf("NAT Gateway Data Processing: $%.4f per GB\n\n", m.costEstimate.NATGatewayPricePerGB))
-		b.WriteString(stepStyle.Render("Projected Monthly Costs:\n"))
-		b.WriteString(fmt.Sprintf("  Current NAT Gateway cost:     %s/month\n", formatCurrency(m.costEstimate.CurrentMonthlyCost)))
-		b.WriteString(fmt.Sprintf("  Potential S3 savings:         %s/month\n", formatCurrency(m.costEstimate.S3SavingsMonthly)))
-		b.WriteString(fmt.Sprintf("  Potential DynamoDB savings:   %s/month\n", formatCurrency(m.costEstimate.DynamoSavingsMonthly)))
-		b.WriteString("  ─────────────────────────────────────────\n")
-		b.WriteString(highlightStyle.Render(fmt.Sprintf("  TOTAL POTENTIAL SAVINGS:      %s/month (%s/year)\n\n",
-			formatCurrency(m.costEstimate.TotalSavingsMonthly), formatCurrency(m.costEstimate.TotalSavingsMonthly*12))))
-
-		b.WriteString(infoStyle.Render("Note: Actual costs depend on real traffic patterns. Run longer\n"))
-		b.WriteString(infoStyle.Render("scans during peak hours for more accurate estimates.\n\n"))
-	}
-
-	// Remediation Steps
-	if m.endpointAnalysis != nil && m.endpointAnalysis.HasIssues() {
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
-		b.WriteString(stepStyle.Render("                    REMEDIATION STEPS\n"))
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
-
-		// Create missing endpoints
-		if cmds := m.endpointAnalysis.GetCreateEndpointCommands(); len(cmds) > 0 {
-			b.WriteString(stepStyle.Render("📦 Create Missing VPC Endpoints:\n\n"))
-			for _, cmd := range cmds {
-				b.WriteString(fmt.Sprintf("%s\n\n", cmd))
-			}
-		}
-
-		// Add missing routes
-		if cmds := m.endpointAnalysis.GetAddRouteCommands(); len(cmds) > 0 {
-			b.WriteString(stepStyle.Render("🔗 Add Missing Route Table Associations:\n\n"))
-			for _, cmd := range cmds {
-				b.WriteString(fmt.Sprintf("%s\n\n", cmd))
-			}
-		}
-	}
-
-	// Recommendations
-	if len(m.recommendations) > 0 {
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
-		b.WriteString(stepStyle.Render("                      RECOMMENDATIONS\n"))
-		b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
-
-		for i, rec := range m.recommendations {
-			b.WriteString(highlightStyle.Render(fmt.Sprintf("%d. %s [%s priority]\n\n", i+1, rec.Title, strings.ToUpper(rec.Priority))))
-			b.WriteString(fmt.Sprintf("%s\n\n", rec.Description))
-
-			if len(rec.Benefits) > 0 {
-				b.WriteString(stepStyle.Render("Benefits:\n"))
-				for _, benefit := range rec.Benefits {
-					b.WriteString(fmt.Sprintf("  ✓ %s\n", benefit))
-				}
-				b.WriteString("\n")
-			}
-
-			if rec.Savings != "" {
-				b.WriteString(highlightStyle.Render(fmt.Sprintf("💰 %s\n\n", rec.Savings)))
-			}
-
-			if len(rec.Commands) > 0 {
-				b.WriteString(stepStyle.Render("How to implement:\n"))
-				for _, cmd := range rec.Commands {
-					if strings.HasPrefix(cmd, "#") {
-						b.WriteString(infoStyle.Render(fmt.Sprintf("%s\n", cmd)))
-					} else {
-						b.WriteString(fmt.Sprintf("%s\n", cmd))
-					}
-				}
-				b.WriteString("\n")
-			}
-
-			if i < len(m.recommendations)-1 {
-				b.WriteString(strings.Repeat("-", 63) + "\n\n")
-			}
-		}
-	}
-
-	b.WriteString(warningStyle.Render("⚠️  DISCLAIMERS:\n"))
-	b.WriteString("   • Cost estimates based on traffic sample collected\n")
-	b.WriteString("   • Actual costs may vary based on traffic patterns\n")
-	b.WriteString("   • Gateway VPC Endpoints for S3 and DynamoDB are FREE\n\n")
-
-	// Export options
-	b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n"))
-	b.WriteString(stepStyle.Render("                       EXPORT OPTIONS\n"))
-	b.WriteString(stepStyle.Render("═══════════════════════════════════════════════════════════════\n\n"))
-	b.WriteString("  [M] Export as Markdown    [J] Export as JSON    [Enter] Exit\n")
-	if m.exportMsg != "" {
-		b.WriteString(fmt.Sprintf("\n  %s\n", m.exportMsg))
-	}
-
-	return b.String()
-}
-
 func (m *deepScanModel) discoverNATs() tea.Msg {
 	nats, err := m.scanner.DiscoverNATGateways(m.ctx)
 	if err != nil {
 		return deepScanErrorMsg{err: err}
 	}
 
+	// Filter by --vpc-id
+	if m.vpcID != "" {
+		filtered := []types.NATGateway{}
+		for _, nat := range nats {
+			if nat.VPCID == m.vpcID {
+				filtered = append(filtered, nat)
+			}
+		}
+		nats = filtered
+	}
+
+	// Filter by --nat-gateway-ids
 	if len(m.natIDs) > 0 {
 		filtered := []types.NATGateway{}
 		for _, nat := range nats {
@@ -834,7 +826,7 @@ func formatDuration(d time.Duration) string {
 // formatCurrency formats a float as currency with commas (e.g., $1,234.56)
 func formatCurrency(amount float64) string {
 	p := message.NewPrinter(language.English)
-	return p.Sprintf("$%,.2f", amount)
+	return p.Sprintf("$%.2f", amount)
 }
 
 var (

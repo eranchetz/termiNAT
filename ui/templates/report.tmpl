@@ -1,0 +1,160 @@
+{{success "✓ Deep Dive Scan Complete"}}
+{{success "✓ Flow Logs STOPPED"}}
+
+{{header "NAT GATEWAY OVERVIEW"}}
+{{- range $vpcID, $nats := .VPCNATs}}
+{{- if eq $vpcID $.DeepScannedVPC}}
+{{highlight (printf "📊 VPC: %s [DEEP SCANNED - Traffic Analyzed]" $vpcID)}}
+{{- else}}
+{{dim (printf "📋 VPC: %s [Config Check Only]" $vpcID)}}
+{{- end}}
+{{- range $nats}}
+   • {{.ID}} ({{if .AvailabilityMode}}{{.AvailabilityMode}}{{else}}zonal{{end}})
+{{- end}}
+{{end}}
+
+{{- if .AllFindings}}
+{{header "VPC ENDPOINT ISSUES (All VPCs)"}}
+{{warn (printf "⚠️  Found %d issue(s) across all VPCs:" (len .AllFindings))}}
+{{range .AllFindings}}
+  [{{upper .Severity}}] {{.Title}}
+      {{.Description}}
+      {{dim (printf "→ %s" .Action)}}
+{{end}}
+{{- else}}
+{{header "VPC ENDPOINT STATUS (All VPCs)"}}
+{{success "✓ All VPCs have proper endpoint configuration!"}}
+{{end}}
+
+{{- if .EndpointAnalysis}}
+{{header "DETAILED ENDPOINT CONFIG (Deep Scanned VPC)"}}
+VPC: {{.EndpointAnalysis.VPCID}}
+
+{{green "Gateway Endpoints:"}}
+{{- if .EndpointAnalysis.S3Endpoint}}
+  ✓ S3: {{.EndpointAnalysis.S3Endpoint.ID}} ({{len .EndpointAnalysis.S3Endpoint.RouteTables}} route tables)
+{{- else}}
+  {{warn "✗ S3: NOT CONFIGURED"}}
+{{- end}}
+{{- if .EndpointAnalysis.DynamoEndpoint}}
+  ✓ DynamoDB: {{.EndpointAnalysis.DynamoEndpoint.ID}} ({{len .EndpointAnalysis.DynamoEndpoint.RouteTables}} route tables)
+{{- else}}
+  {{warn "✗ DynamoDB: NOT CONFIGURED"}}
+{{- end}}
+
+{{- if .MissingRoutes}}
+
+{{warn "Route Tables Missing Endpoint Routes:"}}
+{{- range .MissingRoutes}}
+  • {{.RouteTableID}}: missing {{.Service}} route
+{{- end}}
+{{end}}
+
+{{- if .HasInterfaceEndpoints}}
+{{green "Interface Endpoints:"}}
+{{- range .InterfaceEndpointCosts}}
+  • {{.ServiceName}} ({{.DisplayName}}): {{currency .MonthlyCost}}/month
+{{- end}}
+  Total Interface Endpoint Cost: {{currency .TotalInterfaceEndpointCost}}/month
+  {{dim "💡 Interface endpoints cost $0.01/hour + $0.01/GB data processed"}}
+  {{dim "💡 Review unused endpoints to reduce costs"}}
+{{end}}
+{{- end}}
+
+{{- if .HasTraffic}}
+{{header "COLLECTED TRAFFIC SAMPLE"}}
+{{dim (printf "Sample period: %d minutes" .Duration)}}
+
+Total Traffic: {{.TrafficStats.TotalRecords}} records, {{printf "%.2f" .TotalTrafficGB}} GB
+
+{{green "Traffic by Service:"}}
+  Service        Data         Percentage
+  ───────────    ─────────    ──────────
+  S3             {{printf "%8.2f GB" .S3GB}}    {{printf "%5.1f%%" .S3Pct}}
+  DynamoDB       {{printf "%8.2f GB" .DynamoGB}}    {{printf "%5.1f%%" .DynamoPct}}
+  ECR            {{printf "%8.2f GB" .ECRGB}}    {{printf "%5.1f%%" .ECRPct}}
+  Other          {{printf "%8.2f GB" .OtherGB}}    {{printf "%5.1f%%" .OtherPct}}
+
+{{- if .TopSourceIPs}}
+
+{{green "Top Source IPs:"}}
+{{- range .TopSourceIPs}}
+  • {{.IP}}: {{printf "%.2f" .GB}} GB ({{.Records}} records)
+{{- end}}
+{{- if gt .MoreSources 0}}
+  ... and {{.MoreSources}} more sources
+{{- end}}
+{{end}}
+{{- end}}
+
+{{- if .CostEstimate}}
+{{header "COST ESTIMATE"}}
+{{warn (printf "⚠️  Projected from %d-minute sample to monthly estimate" .Duration)}}
+
+NAT Gateway Data Processing: ${{printf "%.4f" .CostEstimate.NATGatewayPricePerGB}} per GB
+
+{{green "Projected Monthly Costs:"}}
+  Current NAT Gateway cost:     {{currency .CostEstimate.CurrentMonthlyCost}}/month
+  Potential S3 savings:         {{currency .CostEstimate.S3SavingsMonthly}}/month
+  Potential DynamoDB savings:   {{currency .CostEstimate.DynamoSavingsMonthly}}/month
+{{- if gt .ECRCost 0.0}}
+  ECR traffic cost (no free endpoint): {{currency .ECRCost}}/month
+{{- end}}
+  ─────────────────────────────────────────
+{{highlight (printf "  TOTAL POTENTIAL SAVINGS:      %s/month (%s/year)" (currency .CostEstimate.TotalSavingsMonthly) (currency .AnnualSavings))}}
+
+{{dim "Note: Actual costs depend on real traffic patterns. Run longer"}}
+{{dim "scans during peak hours for more accurate estimates."}}
+{{end}}
+
+{{- if .HasRemediation}}
+{{header "REMEDIATION STEPS"}}
+{{- if .CreateEndpointCmds}}
+{{green "📦 Create Missing VPC Endpoints:"}}
+{{range .CreateEndpointCmds}}
+{{indent .}}
+{{end}}
+{{- end}}
+{{- if .AddRouteCmds}}
+{{green "🔗 Add Missing Route Table Associations:"}}
+{{range .AddRouteCmds}}
+{{indent .}}
+{{end}}
+{{- end}}
+{{- end}}
+
+{{- if .Recommendations}}
+{{header "RECOMMENDATIONS"}}
+{{- range $i, $rec := .Recommendations}}
+{{highlight (printf "%d. %s [%s priority]" (inc $i) $rec.Title (upper $rec.Priority))}}
+
+{{$rec.Description}}
+{{- if $rec.Benefits}}
+
+{{green "Benefits:"}}
+{{- range $rec.Benefits}}
+  ✓ {{.}}
+{{- end}}
+{{- end}}
+{{- if $rec.Savings}}
+
+{{highlight (printf "💰 %s" $rec.Savings)}}
+{{- end}}
+{{- if $rec.Commands}}
+
+{{green "How to implement:"}}
+{{- range $rec.Commands}}
+{{- if hasPrefix . "#"}}
+{{dim .}}
+{{- else}}
+{{.}}
+{{- end}}
+{{- end}}
+{{- end}}
+{{end}}
+{{- end}}
+
+{{warn "⚠️  DISCLAIMERS:"}}
+  • Cost estimates based on traffic sample collected
+  • Actual costs may vary based on traffic patterns
+  • Gateway VPC Endpoints for S3 and DynamoDB are FREE

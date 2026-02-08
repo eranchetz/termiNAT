@@ -12,20 +12,31 @@ import (
 )
 
 var (
-	region       string
-	profile      string
-	duration     int
-	natIDs       []string
-	autoApprove  bool
-	autoCleanup  bool
-	exportFormat string
-	outputFile   string
+	region                 string
+	profile                string
+	duration               int
+	natIDs                 []string
+	vpcID                  string
+	autoApprove            bool
+	autoCleanup            bool
+	exportFormat           string
+	outputFile             string
+	datahubAPIKey          string
+	datahubCustomerContext string
 )
 
 var scanCmd = &cobra.Command{
 	Use:   "scan",
 	Short: "Scan for NAT Gateway optimization opportunities",
 	Long:  `Scan AWS infrastructure to identify services using NAT Gateway that could use VPC endpoints instead.`,
+}
+
+var demoCmd = &cobra.Command{
+	Use:   "demo",
+	Short: "Show a sample report with realistic fake data (no AWS needed)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return ui.RunDemoScan()
+	},
 }
 
 var quickCmd = &cobra.Command{
@@ -60,6 +71,7 @@ Examples:
 func init() {
 	scanCmd.AddCommand(quickCmd)
 	scanCmd.AddCommand(deepCmd)
+	scanCmd.AddCommand(demoCmd)
 
 	// Common flags
 	scanCmd.PersistentFlags().StringVarP(&region, "region", "r", "", "AWS region (uses AWS_REGION env var if not specified)")
@@ -68,10 +80,13 @@ func init() {
 	// Deep scan specific flags
 	deepCmd.Flags().IntVarP(&duration, "duration", "d", 15, "Flow Log collection duration in minutes (max 60)")
 	deepCmd.Flags().StringSliceVar(&natIDs, "nat-gateway-ids", []string{}, "Specific NAT Gateway IDs to analyze (optional)")
+	deepCmd.Flags().StringVar(&vpcID, "vpc-id", "", "Filter NAT Gateways by VPC ID (optional)")
 	deepCmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Skip approval prompts (for automation)")
 	deepCmd.Flags().BoolVar(&autoCleanup, "auto-cleanup", false, "Automatically delete log groups after scan")
 	deepCmd.Flags().StringVarP(&exportFormat, "export", "e", "", "Export report format [json|markdown]")
 	deepCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file path for export (requires --export)")
+	deepCmd.Flags().StringVar(&datahubAPIKey, "doit-datahub-api-key", "", "DoiT DataHub API key (or set DOIT_DATAHUB_API_KEY)")
+	deepCmd.Flags().StringVar(&datahubCustomerContext, "doit-customer-context", "", "DoiT customer context (optional, for multi-tenant API keys)")
 }
 
 func getRegion(profile string) (string, error) {
@@ -186,5 +201,5 @@ func runDeepScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Run deep scan with UI
-	return ui.RunDeepScan(ctx, scanner, selectedRegion, duration, natIDs, autoApprove, autoCleanup, exportFormat, outputFile)
+	return ui.RunDeepScan(ctx, scanner, selectedRegion, duration, natIDs, vpcID, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerContext)
 }
