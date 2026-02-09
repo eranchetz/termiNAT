@@ -8,7 +8,7 @@ This guide is optimized for AI agents (like Claude, GPT, etc.) to understand, ru
 
 **Key Insight**: NAT Gateways charge $0.045/GB for data processing. S3 and DynamoDB Gateway Endpoints are FREE. This tool finds traffic going through NAT that should use endpoints.
 
-**Tech Stack**: Go 1.21+, AWS SDK, Bubble Tea (TUI), CloudWatch Logs Insights
+**Tech Stack**: Go 1.21+, AWS SDK, Bubble Tea (TUI), Lip Gloss (styling), CloudWatch Logs Insights
 
 ## Quick Context
 
@@ -16,14 +16,15 @@ This guide is optimized for AI agents (like Claude, GPT, etc.) to understand, ru
 
 1. **Quick Scan**: Checks VPC config for missing endpoints (instant, read-only)
 2. **Deep Dive Scan**: Creates temporary Flow Logs, analyzes real traffic, calculates savings (10+ minutes)
+3. **Demo Mode**: Preview the report UI with realistic fake data, no AWS credentials needed
 
 ### Architecture
 
 ```
 terminator/
 ├── cmd/                    # CLI commands (cobra)
-│   ├── root.go            # Root command
-│   └── scan.go            # Scan commands (quick/deep)
+│   ├── root.go            # Root command, version handling
+│   └── scan.go            # Scan commands (quick/deep/demo)
 ├── internal/
 │   ├── core/              # Business logic
 │   │   └── scanner.go     # Main scanner orchestration
@@ -35,11 +36,23 @@ terminator/
 │   │   ├── analyzer.go    # Traffic statistics
 │   │   ├── cost.go        # Cost calculations
 │   │   └── endpoints.go   # VPC endpoint analysis
-│   └── report/            # Report generation (future)
+│   ├── datahub/           # DoiT DataHub integration
+│   │   ├── config.go      # TOML config (~/.terminat/config.toml)
+│   │   └── datahub.go     # Event building, batched HTTP send with retry
+│   └── report/            # Report generation
+│       └── report.go      # Markdown/JSON export
 ├── ui/                    # Terminal UI (Bubble Tea)
 │   ├── quick_scan.go      # Quick scan UI
-│   └── deep_scan.go       # Deep dive scan UI with progress
+│   ├── deep_scan.go       # Deep dive scan UI with progress + NAT selection
+│   ├── report_render.go   # Template-based report renderer
+│   ├── demo.go            # Demo mode with fake data
+│   ├── format_test.go     # formatCurrency tests
+│   └── templates/
+│       └── report.tmpl    # Go text/template for report body
 ├── pkg/types/             # Shared types
+├── scripts/
+│   ├── release.sh         # Build + upload release binaries
+│   └── setup-flowlogs-role.sh
 └── test/                  # E2E testing infrastructure
     ├── infrastructure/    # CloudFormation templates
     └── scripts/           # Test automation scripts
@@ -49,8 +62,11 @@ terminator/
 
 1. **internal/core/scanner.go** - Main orchestrator, calls AWS clients and analysis
 2. **internal/analysis/classifier.go** - Downloads AWS IP ranges, classifies traffic
-3. **ui/deep_scan.go** - Bubble Tea model for interactive scan with progress
-4. **internal/analysis/endpoints.go** - VPC endpoint detection and route analysis
+3. **ui/deep_scan.go** - Bubble Tea model for interactive scan with progress + NAT selection
+4. **ui/report_render.go** - Template-based report renderer (builds data, executes template)
+5. **ui/templates/report.tmpl** - Go text/template for the report body layout
+6. **internal/analysis/endpoints.go** - VPC endpoint detection and route analysis
+7. **internal/datahub/datahub.go** - DoiT DataHub event building and HTTP send
 
 ## Running the Tool
 
@@ -79,6 +95,15 @@ go build -o terminat .
 
 # Deep dive scan (10 minutes)
 ./terminat scan deep --region us-east-1 --duration 5
+
+# Demo mode (no AWS credentials needed)
+./terminat scan demo
+
+# Filter by VPC
+./terminat scan deep --region us-east-1 --vpc-id vpc-xxx
+
+# Scan specific NATs
+./terminat scan deep --region us-east-1 --nat-gateway-ids nat-xxx,nat-yyy
 ```
 
 ## E2E Testing
@@ -404,126 +429,96 @@ Monthly Cost = (Bytes / 1GB) × $0.045 × (30 days / sample duration)
 
 Potential areas for contribution:
 
-1. **Interface VPC Endpoints**: Analyze EC2, Lambda, etc. endpoints
-2. **Historical Analysis**: Use CloudWatch metrics instead of Flow Logs
-3. **Multi-account**: Scan across AWS Organizations
-4. **Cost Explorer Integration**: Compare with actual bills
-5. **Automated Remediation**: Create endpoints automatically
-6. **JSON/CSV Export**: Machine-readable output
-7. **Regional Pricing**: Accurate pricing per region
-8. **Savings Plans**: Factor in existing commitments
+1. **Historical Analysis**: Use CloudWatch metrics instead of Flow Logs
+2. **Multi-account**: Scan across AWS Organizations
+3. **Cost Explorer Integration**: Compare with actual bills
+4. **Automated Remediation**: Create endpoints automatically
+5. **Regional Pricing**: Accurate pricing per region
+6. **Savings Plans**: Factor in existing commitments
+7. **Parallelize VPC analysis**: Use errgroup for concurrent VPC endpoint checks
+8. **Multi-AZ traffic detection**: Detect cross-AZ patterns, suggest NAT per AZ
+9. **Flow Logs data freshness**: Verify timestamps are within expected range
 
-## Recent Updates (2026-01-18)
+## Recent Updates (2026-02-08)
 
-### ECR Traffic Detection Feature
+### v0.6.0 — Template Report, NAT Selection, DataHub, Demo
 
-**Implementation**: Added support for detecting ECR (Elastic Container Registry) traffic through NAT Gateway.
+#### Template-Based Report Rendering
+- Report layout moved from Go code to `ui/templates/report.tmpl` (Go `text/template`)
+- `ui/report_render.go` contains the renderer: `buildReportData()`, `renderReportBody()`, `renderFooter()`
+- Template uses custom FuncMap: `{{green "text"}}`, `{{warn "text"}}`, `{{header "TITLE"}}`, `{{currency 123.45}}`, `{{indent cmd}}`
+- Fixes lipgloss alignment bugs — **never put `\n` inside `Style.Render()` calls**; lipgloss treats multi-line content as a block and adds padding
 
-**Key Changes**:
-- **classifier.go**: Added `ecrRanges` field, uses EC2 service IP ranges for ECR detection
-- **analyzer.go**: Added ECR tracking (`ECRBytes`, `ECRRecords`, `ECRPercentage()`)
-- **deep_scan.go**: Updated UI to display ECR traffic in summary and detailed views
-- **test-stack.yaml**: Added ECR repository, Docker installation, image push traffic generation
+#### Scrollable Viewport with Mouse Support
+- Report renders into `charmbracelet/bubbles/viewport` for scrolling (↑↓ PgUp PgDn)
+- Mouse wheel scrolling via `tea.WithMouseCellMotion()` + `tea.WithAltScreen()`
+- `tea.MouseMsg` forwarded to viewport in `Update()`
+- Footer stays fixed below viewport
 
-**How It Works**:
-- ECR uses EC2 service IP ranges (no separate ECR ranges in AWS IP ranges JSON)
-- Traffic classifier checks destination IPs against EC2 ranges and classifies as "ecr"
-- Test infrastructure continuously builds and pushes Docker images to generate ECR traffic
-- E2E test results: ~4-5% ECR traffic (lower than S3/DynamoDB due to less frequent pushes)
+#### Interactive NAT Gateway Selection (closes #26)
+- New `phaseSelectingNATs` phase between discovery and approval
+- Shown when multiple NATs found and no `--nat-gateway-ids` filter
+- UI: cursor-based multi-select with checkboxes
+- Keys: `↑/↓` move, `space` toggle, `a` select all, `enter` confirm
+- New `--vpc-id` flag filters NATs by VPC before selection
+- Skipped with `--auto-approve` or explicit `--nat-gateway-ids`
 
-**Testing**:
-```bash
-# E2E test includes ECR traffic generation
-./test/scripts/run-e2e-test.sh
+#### DoiT DataHub Integration
+- `internal/datahub/config.go` — TOML config parser (`~/.terminat/config.toml`), no external deps
+- `internal/datahub/datahub.go` — `BuildEvents()` creates 5 events per NAT, `Send()` with 429 retry + 255-batch
+- `apiURL` is `var` (not `const`) so tests can override it
+- CLI flags: `--doit-datahub-api-key`, `--doit-customer-context`
+- Interactive: press `D` in report view to send, with save-to-config prompt
+- Resolution precedence: CLI flag > env var > config file
 
-# Expected results:
-# - S3: ~35-40%
-# - DynamoDB: ~20-25%
-# - ECR: ~4-10%
-# - Other: ~30-40%
+#### Demo Command
+- `terminat scan demo` — creates `deepScanModel` at `phaseDone` with realistic fake data
+- Uses `tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())`
+- No AWS credentials needed — for visual QA and development
+
+#### Release Script (`scripts/release.sh`)
+- Usage: `./scripts/release.sh v0.7.0`
+- Requires version argument (no more defaulting to `dev`)
+- Builds all 5 platforms (darwin/linux amd64/arm64 + windows)
+- Injects version via `-ldflags "-s -w -X main.Version=<version>"`
+- Verifies version string in local binary before uploading
+- Auto-creates GitHub release if it doesn't exist, uploads with `--clobber`
+
+#### Bug Fixes
+- `formatCurrency`: `"$%,.2f"` → `"$%.2f"` (`,` flag unsupported by `message.Printer`)
+- ECR cost line added to both TUI report and markdown export
+
+#### Tests (22 new)
+- `internal/datahub/config_test.go` — 8 tests (parsing, save/load, precedence)
+- `internal/datahub/datahub_test.go` — 10 tests (BuildEvents, Send, retry, batching)
+- `ui/format_test.go` — `TestFormatCurrency` (5 cases) + `TestFormatCurrencyNoBrokenVerbs`
+- `internal/report/report_test.go` — `TestMarkdownContainsECRCost`, `TestMarkdownOmitsECRWhenZero`
+
+### Key Type References
+- `types.NATGateway`: `ID`, `VPCID`, `SubnetID`, `State`, `AvailabilityMode`, `NetworkInterfaceID`, `Tags`
+- `types.RouteTable`: `ID`, `VPCID`, `Routes []Route`, `Subnets`, `Main`, `Tags` (NO `Name` field)
+- `types.Route`: `DestinationCIDR`, `Target`, `TargetType` (NO `TargetID` field)
+- `analysis.CostEstimate`: has `OtherPercentage()` method
+- `analysis.TrafficStats`: has `ECRPercentage()`, `S3Percentage()`, `DynamoPercentage()`, `OtherPercentage()`, `TopSourceIPs(n)` methods
+- `analysis.EndpointAnalysis`: has `HasIssues()`, `HasInterfaceEndpoints()`, `GetCreateEndpointCommands()`, `GetAddRouteCommands()`, `GetInterfaceEndpointCosts()`, `GetTotalInterfaceEndpointMonthlyCost()` methods
+
+### Style Variables
+Defined in `ui/quick_scan.go`:
+```go
+stepStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575")).Bold(true)
+infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D7D7D"))
+successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575")).Bold(true)
+errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000")).Bold(true)
+```
+Defined in `ui/deep_scan.go`:
+```go
+warningStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500")).Bold(true)
+highlightStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true)
+tipStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Italic(true)
 ```
 
-### AWS IP Ranges Caching
-
-**Implementation**: Added 24-hour caching for AWS IP ranges to improve performance and reduce API calls.
-
-**Key Changes**:
-- **classifier.go**: Added caching logic with `getCacheDir()`, `isCacheValid()`, `loadFromCache()`, `saveToCache()`
-- Cache location: `~/.terminator/cache/aws-ip-ranges.json` (2.1 MB)
-- Cache TTL: 24 hours (configurable via `cacheTTL` constant)
-
-**Performance**:
-- First call: ~378ms (download from AWS)
-- Cached calls: ~15ms (25x faster!)
-- Cache automatically refreshes after 24 hours
-
-**Benefits**:
-- Faster startup for repeated scans
-- Works offline if cache exists
-- Reduces load on AWS IP ranges API
-- Transparent to users (no configuration needed)
-
-### Multi-Region Support
-
-**Verification**: Confirmed termiNATor works in ALL AWS regions.
-
-**How It Works**:
-- Downloads global AWS IP ranges file (contains all regions)
-- Loads ALL IP ranges for ALL services across ALL regions
-- No region filtering in classifier - detects traffic to any region
-- Supports 42 regions for S3/EC2, 41 regions for DynamoDB
-
-**Important Notes**:
-- Traffic classification: Works globally, all regions
-- VPC endpoint analysis: Must run in same region as NAT Gateway (VPC endpoints are region-specific)
-- Example: NAT in us-east-1 can detect traffic to S3 in ap-south-1
-
-### Automation Improvements
-
-**Added Flags for Non-Interactive Mode**:
-```bash
-./terminat scan deep --region us-east-1 --duration 5 \
-  --auto-approve \    # Skip approval prompts
-  --auto-cleanup      # Automatically delete log groups
-```
-
-**Use Cases**:
-- CI/CD pipelines
-- Automated testing
-- Scheduled scans
-- Batch processing
-
-**E2E Test Updates**:
-- Fixed stack name passing to `continuous-traffic.sh`
-- Added `--auto-approve` and `--auto-cleanup` flags to E2E test
-- Added ECR repository cleanup to `cleanup.sh`
-
-### E2E Test Infrastructure
-
-**CloudFormation Stack Components**:
-- VPC with public/private subnets
-- NAT Gateway with Elastic IP
-- EC2 instance (Amazon Linux 2023) with Docker
-- S3 bucket for test data
-- DynamoDB table for test data
-- **NEW**: ECR repository for container images
-
-**Traffic Generation**:
-- S3: Downloads 1MB test file (50 requests per batch)
-- DynamoDB: Scans table (25 requests per batch)
-- **NEW**: ECR: Builds and pushes Docker image (1 push per batch)
-- Runs continuously for 30 minutes during scan
-
-**Cleanup Process**:
-1. Empty S3 bucket
-2. **NEW**: Empty ECR repository (delete all images)
-3. Delete CloudFormation stack
-4. Clean local test results
-
-**Known Issues Fixed**:
-- ✅ Stack name with random suffix now passed to traffic script
-- ✅ ECR repository cleanup before stack deletion
-- ✅ Interactive prompts can be skipped with flags
+### Critical Lipgloss Rule
+**NEVER** put `\n` inside `Style.Render()` calls. Lipgloss treats multi-line content as a block and adds padding/alignment to each line. Always do: `style.Render("text") + "\n"`
 
 ## Resources
 
@@ -570,6 +565,26 @@ go test ./...                               # Run all tests
 
 # Deep scan (automated)
 ./terminat scan deep --region us-east-1 --duration 5 --auto-approve --auto-cleanup
+
+# Demo mode (no AWS needed)
+./terminat scan demo
+
+# Filter by VPC
+./terminat scan deep --region us-east-1 --vpc-id vpc-xxx
+
+# Scan specific NATs
+./terminat scan deep --region us-east-1 --nat-gateway-ids nat-xxx,nat-yyy
+
+# Export report
+./terminat scan deep --region us-east-1 --export markdown --output report.md
+
+# With DataHub integration
+./terminat scan deep --region us-east-1 --doit-datahub-api-key KEY --doit-customer-context CTX
+```
+
+### Release
+```bash
+./scripts/release.sh v0.7.0               # Build all platforms + upload to GitHub
 ```
 
 ### AWS Commands
