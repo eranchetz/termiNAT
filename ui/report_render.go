@@ -55,6 +55,7 @@ type reportData struct {
 	CostEstimate     *analysis.CostEstimate
 	Recommendations  []analysis.Recommendation
 	Duration         int
+	LogGroupName     string
 
 	// Computed fields
 	HasTraffic                         bool
@@ -96,6 +97,7 @@ func (m *deepScanModel) buildReportData() reportData {
 		CostEstimate:     m.costEstimate,
 		Recommendations:  m.recommendations,
 		Duration:         m.duration,
+		LogGroupName:     m.logGroupName,
 	}
 
 	for _, nat := range m.nats {

@@ -38,6 +38,13 @@ export AWS_REGION=us-east-1
 
 # Run deep dive scan (analyzes actual traffic, ~10 minutes)
 ./terminat scan deep --region us-east-1 --duration 5
+
+# Run demo scan with fake data (stream output by default)
+./terminat scan demo
+
+# Optional: run interactive full-screen TUI instead of serial stream output
+./terminat scan deep --region us-east-1 --duration 5 --ui tui
+./terminat scan demo --ui tui
 ```
 
 📖 **[Complete Usage Guide](USAGE.md)** - Detailed instructions for production use  
@@ -135,6 +142,9 @@ Analyze actual traffic patterns:
 terminat scan deep --region us-east-1 --duration 5
 ```
 
+By default, scans run in serial stream mode (`--ui stream`) so output is append-only and CI/log friendly.
+Use `--ui tui` for the interactive Bubble Tea interface.
+
 This will:
 1. Create temporary VPC Flow Logs for your NAT Gateway
 2. Wait 5 minutes for Flow Logs to initialize
@@ -171,8 +181,29 @@ terminat scan quick --region <region>
 # Deep dive scan
 terminat scan deep --region <region> --duration <minutes>
 
+# Demo scan (fake data, no AWS credentials needed)
+terminat scan demo
+
+# Optional TUI mode
+terminat scan quick --region <region> --ui tui
+terminat scan deep --region <region> --duration <minutes> --ui tui
+terminat scan demo --ui tui
+
 # Scan specific NAT Gateway
 terminat scan deep --region us-east-1 --nat-id nat-1234567890abcdef0
+```
+
+### UI Modes
+
+- Default mode is serial stream output (`--ui stream`) for `scan quick`, `scan deep`, and `scan demo`.
+- Use `--ui tui` only when you want the interactive full-screen Bubble Tea experience.
+
+### Fast Validation
+
+Run the smoke test to verify stream-mode CLI wiring without creating AWS resources:
+
+```bash
+./test/scripts/smoke-ui-stream.sh
 ```
 
 ### Cleanup Commands

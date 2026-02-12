@@ -63,7 +63,18 @@ type scanErrorMsg struct {
 
 type scanCompleteMsg struct{}
 
-func RunQuickScan(ctx context.Context, scanner *core.Scanner) error {
+func RunQuickScan(ctx context.Context, scanner *core.Scanner, uiMode string) error {
+	switch strings.ToLower(strings.TrimSpace(uiMode)) {
+	case "", "stream":
+		return RunQuickScanStream(ctx, scanner)
+	case "tui":
+		return runQuickScanTUI(ctx, scanner)
+	default:
+		return fmt.Errorf("invalid --ui value %q (valid: stream, tui)", uiMode)
+	}
+}
+
+func runQuickScanTUI(ctx context.Context, scanner *core.Scanner) error {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4"))
@@ -185,7 +196,7 @@ func (m quickScanModel) renderResults() string {
 func (m quickScanModel) discoverNATs() tea.Msg {
 	m.step = "Discovering NAT Gateways..."
 
-	nats, err := m.scanner.DiscoverNATGateways(m.ctx)
+	nats, err := discoverNATsForQuickScan(m.ctx, m.scanner)
 	if err != nil {
 		return scanErrorMsg{err: err}
 	}
@@ -196,24 +207,41 @@ func (m quickScanModel) discoverNATs() tea.Msg {
 func (m quickScanModel) analyzeConfiguration() tea.Msg {
 	m.step = "Analyzing VPC endpoint configuration..."
 
+	findings, err := analyzeQuickFindings(m.ctx, m.scanner, m.nats)
+	if err != nil {
+		return scanErrorMsg{err: err}
+	}
+
+	return findingsMsg{findings: findings}
+}
+
+func (m quickScanModel) complete() tea.Msg {
+	return scanCompleteMsg{}
+}
+
+func discoverNATsForQuickScan(ctx context.Context, scanner *core.Scanner) ([]types.NATGateway, error) {
+	return scanner.DiscoverNATGateways(ctx)
+}
+
+func analyzeQuickFindings(ctx context.Context, scanner *core.Scanner, nats []types.NATGateway) ([]types.Finding, error) {
 	var findings []types.Finding
 
 	// Group NATs by VPC
 	vpcNATs := make(map[string][]types.NATGateway)
-	for _, nat := range m.nats {
+	for _, nat := range nats {
 		vpcNATs[nat.VPCID] = append(vpcNATs[nat.VPCID], nat)
 	}
 
 	// Check each VPC for missing endpoints
 	for vpcID := range vpcNATs {
-		endpoints, err := m.scanner.DiscoverVPCEndpoints(m.ctx, vpcID)
+		endpoints, err := scanner.DiscoverVPCEndpoints(ctx, vpcID)
 		if err != nil {
-			return scanErrorMsg{err: err}
+			return nil, err
 		}
 
-		routeTables, err := m.scanner.DiscoverRouteTables(m.ctx, vpcID)
+		routeTables, err := scanner.DiscoverRouteTables(ctx, vpcID)
 		if err != nil {
-			return scanErrorMsg{err: err}
+			return nil, err
 		}
 
 		// Check for S3 gateway endpoint
@@ -342,9 +370,5 @@ func (m quickScanModel) analyzeConfiguration() tea.Msg {
 		}
 	}
 
-	return findingsMsg{findings: findings}
-}
-
-func (m quickScanModel) complete() tea.Msg {
-	return scanCompleteMsg{}
+	return findings, nil
 }

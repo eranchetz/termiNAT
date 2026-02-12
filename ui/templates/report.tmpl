@@ -85,6 +85,20 @@ Total Traffic: {{.TrafficStats.TotalRecords}} records, {{printf "%.2f" .TotalTra
   ... and {{.MoreSources}} more sources
 {{- end}}
 {{end}}
+{{- else}}
+{{header "TRAFFIC ANALYSIS"}}
+{{warn "⚠️  No traffic data collected during the scan period"}}
+
+{{dim "Possible reasons:"}}
+  • No applications were actively using the NAT Gateway during collection
+  • Flow Logs may not have started delivering data yet (can take 5-10 minutes)
+  • All traffic was to private IPs (filtered out by analysis)
+
+{{dim "To diagnose:"}}
+  1. Check if applications are running and making outbound requests
+  2. Verify Flow Logs are delivering data:
+     {{dim (printf "     ./scripts/check-flowlogs-data.sh %s" .LogGroupName)}}
+  3. Try running a longer scan (15-30 minutes) during peak usage hours
 {{- end}}
 
 {{- if .CostEstimate}}

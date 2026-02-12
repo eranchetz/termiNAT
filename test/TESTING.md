@@ -9,6 +9,71 @@ This guide provides a complete, repeatable testing workflow for termiNATor using
 - **Easy to validate**: Clear before/after metrics
 - **Easy to clean up**: Single stack deletion removes everything
 
+## Fast Smoke Test (No AWS Resources)
+
+Use this before E2E to verify CLI stream-mode wiring and validation:
+
+```bash
+./test/scripts/smoke-ui-stream.sh
+```
+
+What it validates:
+- `scan quick` and `scan deep` expose `--ui`
+- Invalid `--ui` values fail fast
+- `--ui stream` path is reachable for quick/deep commands
+
+## Stream UI Manual Validation (macOS + Linux)
+
+Run this checklist on both macOS and Linux terminals.
+
+### 1) Build
+
+```bash
+go build -o terminat .
+```
+
+### 2) Width 80 columns
+
+```bash
+COLUMNS=80 ./terminat scan demo --ui stream
+```
+
+Check:
+- No screen clearing/full-screen redraw
+- Long lines are wrapped, not truncated mid-output
+- Wrapped continuation lines stay readable/aligned
+
+### 3) Width 100 columns
+
+```bash
+COLUMNS=100 ./terminat scan demo --ui stream
+```
+
+Check:
+- Section headers and bullets remain readable
+- Remediation/recommendation lines do not break awkwardly
+
+### 4) Width 120+ columns
+
+```bash
+COLUMNS=120 ./terminat scan demo --ui stream
+```
+
+Check:
+- Output remains stable and clean with fewer wraps
+- No duplicated or missing lines after wrapping changes
+
+### 5) TUI only by explicit flag
+
+```bash
+./terminat scan demo
+./terminat scan demo --ui tui
+```
+
+Check:
+- First command uses stream output (default)
+- Second command opens interactive full-screen TUI
+
 ---
 
 ## Test Architecture

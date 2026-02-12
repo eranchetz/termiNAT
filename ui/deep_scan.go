@@ -112,7 +112,18 @@ type deepScanErrorMsg struct{ err error }
 type deepScanCompleteMsg struct{}
 type datahubResultMsg struct{ err error }
 
-func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, vpcID string, autoApprove, autoCleanup bool, exportFormat, outputFile string, datahubAPIKey, datahubCustomerCtx string) error {
+func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, vpcID, uiMode string, autoApprove, autoCleanup bool, exportFormat, outputFile string, datahubAPIKey, datahubCustomerCtx string) error {
+	switch strings.ToLower(strings.TrimSpace(uiMode)) {
+	case "", "stream":
+		return RunDeepScanStream(ctx, scanner, region, duration, natIDs, vpcID, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerCtx)
+	case "tui":
+		return runDeepScanTUI(ctx, scanner, region, duration, natIDs, vpcID, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerCtx)
+	default:
+		return fmt.Errorf("invalid --ui value %q (valid: stream, tui)", uiMode)
+	}
+}
+
+func runDeepScanTUI(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, vpcID string, autoApprove, autoCleanup bool, exportFormat, outputFile string, datahubAPIKey, datahubCustomerCtx string) error {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4"))

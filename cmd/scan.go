@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/doitintl/terminator/internal/core"
@@ -17,6 +18,9 @@ var (
 	duration               int
 	natIDs                 []string
 	vpcID                  string
+	deepUIMode             string
+	quickUIMode            string
+	demoUIMode             string
 	autoApprove            bool
 	autoCleanup            bool
 	exportFormat           string
@@ -34,9 +38,7 @@ var scanCmd = &cobra.Command{
 var demoCmd = &cobra.Command{
 	Use:   "demo",
 	Short: "Show a sample report with realistic fake data (no AWS needed)",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return ui.RunDemoScan()
-	},
+	RunE:  runDemoScan,
 }
 
 var quickCmd = &cobra.Command{
@@ -81,6 +83,9 @@ func init() {
 	deepCmd.Flags().IntVarP(&duration, "duration", "d", 15, "Flow Log collection duration in minutes (max 60)")
 	deepCmd.Flags().StringSliceVar(&natIDs, "nat-gateway-ids", []string{}, "Specific NAT Gateway IDs to analyze (optional)")
 	deepCmd.Flags().StringVar(&vpcID, "vpc-id", "", "Filter NAT Gateways by VPC ID (optional)")
+	deepCmd.Flags().StringVar(&deepUIMode, "ui", "stream", "UI mode [stream|tui]")
+	quickCmd.Flags().StringVar(&quickUIMode, "ui", "stream", "UI mode [stream|tui]")
+	demoCmd.Flags().StringVar(&demoUIMode, "ui", "stream", "UI mode [stream|tui]")
 	deepCmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Skip approval prompts (for automation)")
 	deepCmd.Flags().BoolVar(&autoCleanup, "auto-cleanup", false, "Automatically delete log groups after scan")
 	deepCmd.Flags().StringVarP(&exportFormat, "export", "e", "", "Export report format [json|markdown]")
@@ -150,6 +155,9 @@ func printAuthHelp(err error) {
 
 func runQuickScan(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
+	if !isValidUIMode(quickUIMode) {
+		return fmt.Errorf("invalid --ui value %q (valid: stream, tui)", quickUIMode)
+	}
 
 	// Get profile from flag or environment (optional)
 	selectedProfile := getProfile()
@@ -168,11 +176,14 @@ func runQuickScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Run quick scan with UI
-	return ui.RunQuickScan(ctx, scanner)
+	return ui.RunQuickScan(ctx, scanner, quickUIMode)
 }
 
 func runDeepScan(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
+	if !isValidUIMode(deepUIMode) {
+		return fmt.Errorf("invalid --ui value %q (valid: stream, tui)", deepUIMode)
+	}
 
 	// Validate duration
 	if duration < 5 || duration > 60 {
@@ -201,5 +212,21 @@ func runDeepScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Run deep scan with UI
-	return ui.RunDeepScan(ctx, scanner, selectedRegion, duration, natIDs, vpcID, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerContext)
+	return ui.RunDeepScan(ctx, scanner, selectedRegion, duration, natIDs, vpcID, deepUIMode, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerContext)
+}
+
+func runDemoScan(cmd *cobra.Command, args []string) error {
+	if !isValidUIMode(demoUIMode) {
+		return fmt.Errorf("invalid --ui value %q (valid: stream, tui)", demoUIMode)
+	}
+	return ui.RunDemoScan(demoUIMode)
+}
+
+func isValidUIMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "stream", "tui":
+		return true
+	default:
+		return false
+	}
 }

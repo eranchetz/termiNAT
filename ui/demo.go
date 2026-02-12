@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -12,12 +13,34 @@ import (
 )
 
 // RunDemoScan shows a sample report with realistic fake data, no AWS needed.
-func RunDemoScan() error {
+func RunDemoScan(uiMode string) error {
+	switch strings.ToLower(strings.TrimSpace(uiMode)) {
+	case "", "stream":
+		m := demoDeepScanModel()
+		fmt.Println("[demo] stream mode")
+		fmt.Println()
+		fmt.Println(strings.TrimRight(m.renderReportBody(), "\n"))
+		return nil
+	case "tui":
+		return runDemoScanTUI()
+	default:
+		return fmt.Errorf("invalid --ui value %q (valid: stream, tui)", uiMode)
+	}
+}
+
+func runDemoScanTUI() error {
+	m := demoDeepScanModel()
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	_, err := p.Run()
+	return err
+}
+
+func demoDeepScanModel() *deepScanModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4"))
 
-	m := &deepScanModel{
+	return &deepScanModel{
 		spinner:   s,
 		phase:     phaseDone,
 		region:    "us-east-1",
@@ -78,8 +101,4 @@ func RunDemoScan() error {
 			},
 		},
 	}
-
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	_, err := p.Run()
-	return err
 }

@@ -89,6 +89,9 @@ Analyze real traffic patterns to calculate actual savings:
 ./terminat scan deep --region us-east-1 --duration 5
 ```
 
+By default, `scan quick` and `scan deep` use serial stream output (`--ui stream`) so logs stay append-only.
+Use `--ui tui` for the interactive full-screen Bubble Tea interface.
+
 **What it does:**
 - ✅ Creates temporary VPC Flow Logs (you approve first)
 - ✅ Collects 5 minutes of traffic data
@@ -208,6 +211,13 @@ aws ec2 create-vpc-endpoint \
 ./terminat scan deep --region us-east-1 --duration 30
 ```
 
+### Interactive TUI Mode
+
+```bash
+./terminat scan quick --region us-east-1 --ui tui
+./terminat scan deep --region us-east-1 --duration 15 --ui tui
+```
+
 ### Multiple Regions
 
 ```bash
@@ -261,6 +271,20 @@ Delete CloudWatch Log Group? [Y/n]
 ```
 
 **Recommendation**: Delete unless you need detailed traffic analysis.
+
+### Option 3: Demo Scan (No AWS Needed)
+
+Preview report output using realistic fake data:
+
+```bash
+./terminat scan demo
+```
+
+Use full-screen TUI only when explicitly requested:
+
+```bash
+./terminat scan demo --ui tui
+```
 
 ## Troubleshooting
 

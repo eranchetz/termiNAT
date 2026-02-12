@@ -225,6 +225,11 @@ func (s *Scanner) AnalyzeTraffic(ctx context.Context, logGroupName string, start
 		return nil, fmt.Errorf("failed to get query results: %w", err)
 	}
 
+	// Diagnostic: check if query returned any results
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no Flow Logs data found - query returned 0 results. This could mean: (1) No traffic during collection period, (2) Flow Logs not delivering data yet, or (3) All traffic was to private IPs (filtered out)")
+	}
+
 	// Process aggregated results
 	analyzer, err := analysis.NewTrafficAnalyzer()
 	if err != nil {
