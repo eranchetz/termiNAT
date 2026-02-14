@@ -49,3 +49,7 @@ build/
 # Temp report exports
 terminator-report-*.json
 terminator-report-*.md
+reports/e2e-deep-scan-*.md
+PR_DESCRIPTION.md
+*output-bugs.png
+UIbugs.png

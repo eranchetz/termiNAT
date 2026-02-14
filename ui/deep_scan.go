@@ -181,7 +181,7 @@ func (m *deepScanModel) cleanupFlowLogs() {
 }
 
 func (m *deepScanModel) exportReport(format string) {
-	r := report.New(m.region, m.accountID, m.duration, m.trafficStats, m.costEstimate, m.endpointAnalysis)
+	r := report.New(m.region, m.accountID, m.duration, m.nats, m.trafficStats, m.costEstimate, m.endpointAnalysis)
 
 	var filename string
 	var err error
@@ -195,7 +195,7 @@ func (m *deepScanModel) exportReport(format string) {
 		if format == "json" {
 			ext = ".json"
 		}
-		filename = fmt.Sprintf("terminator-report-%s%s", timestamp, ext)
+		filename = fmt.Sprintf("terminat-report-%s%s", timestamp, ext)
 	}
 
 	switch format {

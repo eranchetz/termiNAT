@@ -8,7 +8,7 @@ LOG_GROUP="${1}"
 
 if [ -z "$LOG_GROUP" ]; then
     echo "Usage: $0 <log-group-name>"
-    echo "Example: $0 /aws/vpc/flowlogs/terminator-1234567890"
+    echo "Example: $0 /aws/vpc/flowlogs/terminat-1234567890"
     exit 1
 fi
 
@@ -27,14 +27,19 @@ aws logs describe-log-streams --log-group-name "$LOG_GROUP" --order-by LastEvent
 # Query for raw records (last 30 minutes)
 echo ""
 echo "3. Querying for raw Flow Logs records (last 30 minutes)..."
-START_TIME=$(date -u -d '30 minutes ago' +%s)
+# GNU date (Linux) and BSD date (macOS) compatibility
+if START_TIME=$(date -u -d '30 minutes ago' +%s 2>/dev/null); then
+    :
+else
+    START_TIME=$(date -u -v-30M +%s)
+fi
 END_TIME=$(date -u +%s)
 
 QUERY_ID=$(aws logs start-query \
     --log-group-name "$LOG_GROUP" \
     --start-time $START_TIME \
     --end-time $END_TIME \
-    --query-string 'fields @timestamp, pkt_srcaddr, pkt_dstaddr, bytes, packets, action | limit 20' \
+    --query-string 'fields @timestamp, @message | parse @message "* * * * * * * * * * * * * *" as f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14 | fields @timestamp, f2 as srcaddr, f3 as dstaddr, f4 as pkt_srcaddr, f5 as pkt_dstaddr, f10 as flow_bytes, f9 as packets, f13 as action | limit 20' \
     --query 'queryId' \
     --output text)
 
@@ -54,7 +59,7 @@ aws logs get-query-results --query-id "$QUERY_ID" --output json | jq -r '
                 [.[] | select(.field == "@timestamp").value,
                  .[] | select(.field == "pkt_srcaddr").value,
                  .[] | select(.field == "pkt_dstaddr").value,
-                 .[] | select(.field == "bytes").value,
+                 .[] | select(.field == "flow_bytes").value,
                  .[] | select(.field == "action").value] | 
                 @tsv)
         end
@@ -70,7 +75,7 @@ QUERY_ID=$(aws logs start-query \
     --log-group-name "$LOG_GROUP" \
     --start-time $START_TIME \
     --end-time $END_TIME \
-    --query-string 'fields @timestamp, pkt_dstaddr, bytes | filter action = "ACCEPT" | stats sum(bytes) as total_bytes, count(*) as records by pkt_dstaddr | sort total_bytes desc | limit 10' \
+    --query-string 'fields @message | parse @message "* * * * * * * * * * * * * *" as f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14 | filter f13 = "ACCEPT" | fields coalesce(f5, f3) as resolved_dst, f10 as flow_bytes | stats sum(flow_bytes) as total_bytes, count(*) as records by resolved_dst | sort total_bytes desc | limit 10' \
     --query 'queryId' \
     --output text)
 
@@ -88,7 +93,7 @@ aws logs get-query-results --query-id "$QUERY_ID" --output json | jq -r '
             "Destination IP | Total Bytes | Records",
             "---------------|-------------|--------",
             (.results[] | 
-                [.[] | select(.field == "pkt_dstaddr").value,
+                [.[] | select(.field == "resolved_dst").value,
                  .[] | select(.field == "total_bytes").value,
                  .[] | select(.field == "records").value] | 
                 @tsv)

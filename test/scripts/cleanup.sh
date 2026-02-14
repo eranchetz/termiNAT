@@ -6,6 +6,15 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+AUTO_CONFIRM=false
+
+for arg in "$@"; do
+    case "$arg" in
+        -y|--yes)
+            AUTO_CONFIRM=true
+            ;;
+    esac
+done
 
 # Configuration - get stack name from saved file or use default
 if [ -f "test/results/stack-name.txt" ]; then
@@ -26,11 +35,15 @@ if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$RE
     exit 0
 fi
 
-# Confirm deletion
-read -p "Are you sure you want to delete the test infrastructure? (yes/no): " CONFIRM
-if [ "$CONFIRM" != "yes" ]; then
-    echo -e "${YELLOW}Cleanup cancelled${NC}"
-    exit 0
+# Confirm deletion (unless --yes is provided)
+if [ "$AUTO_CONFIRM" = false ]; then
+    read -p "Are you sure you want to delete the test infrastructure? (yes/no): " CONFIRM
+    if [ "$CONFIRM" != "yes" ]; then
+        echo -e "${YELLOW}Cleanup cancelled${NC}"
+        exit 0
+    fi
+else
+    echo "Auto-confirm enabled (--yes); proceeding with cleanup"
 fi
 
 echo ""

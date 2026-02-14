@@ -3,6 +3,7 @@ package analysis
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
@@ -54,15 +55,26 @@ func (ta *TrafficAnalyzer) AnalyzeAggregatedResults(results [][]types.ResultFiel
 
 		// Extract fields from aggregated result
 		for _, field := range result {
-			if *field.Field == "pkt_dstaddr" {
+			if field.Field == nil || field.Value == nil {
+				continue
+			}
+
+			switch *field.Field {
+			case "pkt_dstaddr", "dstaddr", "resolved_dst":
 				dstAddr = *field.Value
-			} else if *field.Field == "total_bytes" {
-				fmt.Sscanf(*field.Value, "%d", &totalBytes)
+			case "total_bytes":
+				if bytes, err := parseAggregatedBytes(*field.Value); err == nil {
+					totalBytes = bytes
+				}
 			}
 		}
 
-		if dstAddr == "" || totalBytes == 0 {
+		if totalBytes == 0 {
 			continue
+		}
+
+		if dstAddr == "" || dstAddr == "-" {
+			dstAddr = "unknown"
 		}
 
 		service := ta.classifier.ClassifyIP(dstAddr)
@@ -87,6 +99,24 @@ func (ta *TrafficAnalyzer) AnalyzeAggregatedResults(results [][]types.ResultFiel
 	}
 
 	return &ta.stats, nil
+}
+
+func parseAggregatedBytes(raw string) (int64, error) {
+	if raw == "" {
+		return 0, fmt.Errorf("empty bytes value")
+	}
+
+	// Most CloudWatch results are integer strings.
+	if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return v, nil
+	}
+
+	// Fallback for values that may include decimal representation.
+	fv, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, err
+	}
+	return int64(fv), nil
 }
 
 func (ta *TrafficAnalyzer) AnalyzeFlowLogs(logLines []string) (*TrafficStats, error) {

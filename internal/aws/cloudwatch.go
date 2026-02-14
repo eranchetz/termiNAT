@@ -138,12 +138,54 @@ func (c *CloudWatchLogsClient) WaitForQueryResults(ctx context.Context, queryID 
 	}
 }
 
+// HasLogEvents checks whether the log group has at least one event in the given time range.
+// startTime and endTime are unix seconds.
+func (c *CloudWatchLogsClient) HasLogEvents(ctx context.Context, logGroupName string, startTime, endTime int64) (bool, error) {
+	startMillis := startTime * 1000
+	endMillis := endTime * 1000
+
+	resp, err := c.client.FilterLogEvents(ctx, &cloudwatchlogs.FilterLogEventsInput{
+		LogGroupName: &logGroupName,
+		StartTime:    &startMillis,
+		EndTime:      &endMillis,
+		Limit:        int32Ptr(1),
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to filter log events: %w", err)
+	}
+
+	return len(resp.Events) > 0, nil
+}
+
+// HasTrafficLogEvents checks whether the log group has at least one non-NODATA/SKIPDATA
+// flow-log event in the given time range. startTime and endTime are unix seconds.
+func (c *CloudWatchLogsClient) HasTrafficLogEvents(ctx context.Context, logGroupName string, startTime, endTime int64) (bool, error) {
+	startMillis := startTime * 1000
+	endMillis := endTime * 1000
+	filterPattern := "-NODATA -SKIPDATA"
+
+	resp, err := c.client.FilterLogEvents(ctx, &cloudwatchlogs.FilterLogEventsInput{
+		LogGroupName:  &logGroupName,
+		StartTime:     &startMillis,
+		EndTime:       &endMillis,
+		FilterPattern: &filterPattern,
+		Limit:         int32Ptr(1),
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to filter traffic log events: %w", err)
+	}
+
+	return len(resp.Events) > 0, nil
+}
+
 // QueryFlowLogs queries Flow Logs using CloudWatch Logs Insights
 func (c *CloudWatchLogsClient) QueryFlowLogs(ctx context.Context, logGroupName string, startTime, endTime time.Time) (string, error) {
 	// Query to extract traffic by destination
-	query := `fields @timestamp, pkt_dstaddr, bytes
-| filter action = "ACCEPT"
-| stats sum(bytes) as total_bytes by pkt_dstaddr
+	query := `fields @message
+| parse @message "* * * * * * * * * * * * * *" as f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14
+| filter f13 = "ACCEPT"
+| fields coalesce(f5, f3) as resolved_dst, f10 as flow_bytes
+| stats sum(flow_bytes) as total_bytes by resolved_dst
 | sort total_bytes desc`
 
 	input := &cloudwatchlogs.StartQueryInput{

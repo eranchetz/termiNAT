@@ -78,11 +78,11 @@ echo ""
 echo "Role ARN: $ROLE_ARN"
 echo ""
 echo "You can now run Deep Dive scans:"
-echo "  ./terminator scan deep --region $REGION --duration 15"
+echo "  ./terminat scan deep --region $REGION --duration 15"
 echo ""
 
 # Save role ARN for easy access
-echo "$ROLE_ARN" > .terminator-role-arn
+echo "$ROLE_ARN" > .terminat-role-arn
 
 # Cleanup temp files
 rm -f /tmp/flowlogs-trust-policy.json /tmp/flowlogs-policy.json

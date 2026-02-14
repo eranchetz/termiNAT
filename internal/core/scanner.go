@@ -208,13 +208,26 @@ func (s *Scanner) CheckActiveFlowLogs(ctx context.Context, logGroupName string) 
 
 // AnalyzeTraffic analyzes Flow Logs and classifies traffic using aggregated CloudWatch query
 func (s *Scanner) AnalyzeTraffic(ctx context.Context, logGroupName string, startTime, endTime int64) (*analysis.TrafficStats, error) {
+	// CloudWatch Logs ingestion can lag behind Flow Logs status; wait until at least one
+	// non-NODATA/SKIPDATA event exists before running analysis.
+	if err := s.waitForFlowLogsData(ctx, logGroupName, startTime, 5*time.Minute); err != nil {
+		return nil, err
+	}
+
+	queryEndTime := endTime
+	if now := time.Now().Unix(); now > queryEndTime {
+		queryEndTime = now
+	}
+
 	// Use aggregated query to avoid OOM on large datasets
-	query := `fields @timestamp, pkt_dstaddr, bytes
-| filter action = "ACCEPT"
-| stats sum(bytes) as total_bytes by pkt_dstaddr
+	query := `fields @message
+| parse @message "* * * * * * * * * * * * * *" as f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14
+| filter f13 = "ACCEPT"
+| fields coalesce(f5, f3) as resolved_dst, f10 as flow_bytes
+| stats sum(flow_bytes) as total_bytes by resolved_dst
 | sort total_bytes desc`
 
-	queryID, err := s.cwlClient.StartQuery(ctx, logGroupName, startTime, endTime, query)
+	queryID, err := s.cwlClient.StartQuery(ctx, logGroupName, startTime, queryEndTime, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start query: %w", err)
 	}
@@ -236,7 +249,81 @@ func (s *Scanner) AnalyzeTraffic(ctx context.Context, logGroupName string, start
 		return nil, fmt.Errorf("failed to create analyzer: %w", err)
 	}
 
-	return analyzer.AnalyzeAggregatedResults(results)
+	stats, err := analyzer.AnalyzeAggregatedResults(results)
+	if err != nil {
+		return nil, err
+	}
+	if stats.TotalRecords > 0 {
+		return stats, nil
+	}
+
+	// Fallback path: when aggregated parsing yields zero, parse raw log lines directly.
+	rawStats, err := s.analyzeTrafficFromRawMessages(ctx, logGroupName, startTime, queryEndTime, analyzer)
+	if err != nil {
+		return nil, fmt.Errorf("aggregated analysis returned zero records and fallback raw analysis failed: %w", err)
+	}
+	if rawStats.TotalRecords > 0 {
+		return rawStats, nil
+	}
+
+	return stats, nil
+}
+
+func (s *Scanner) waitForFlowLogsData(ctx context.Context, logGroupName string, startTime int64, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	pollInterval := 15 * time.Second
+
+	for {
+		endTime := time.Now().Unix()
+		hasEvents, err := s.cwlClient.HasTrafficLogEvents(ctx, logGroupName, startTime, endTime)
+		if err != nil {
+			return fmt.Errorf("failed checking Flow Logs data presence: %w", err)
+		}
+		if hasEvents {
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("no non-NODATA flow log events ingested yet in log group %s after waiting %s", logGroupName, timeout)
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("scan cancelled while waiting for Flow Logs data: %w", ctx.Err())
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+func (s *Scanner) analyzeTrafficFromRawMessages(ctx context.Context, logGroupName string, startTime, endTime int64, analyzer *analysis.TrafficAnalyzer) (*analysis.TrafficStats, error) {
+	rawQuery := `fields @message
+| filter @message not like /NODATA|SKIPDATA/
+| limit 20000`
+
+	queryID, err := s.cwlClient.StartQuery(ctx, logGroupName, startTime, endTime, rawQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start raw flow logs query: %w", err)
+	}
+
+	results, err := s.cwlClient.WaitForQueryResults(ctx, queryID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get raw flow logs results: %w", err)
+	}
+
+	logLines := make([]string, 0, len(results))
+	for _, row := range results {
+		for _, field := range row {
+			if field.Field == nil || field.Value == nil {
+				continue
+			}
+			if *field.Field == "@message" && *field.Value != "" {
+				logLines = append(logLines, *field.Value)
+				break
+			}
+		}
+	}
+
+	return analyzer.AnalyzeFlowLogs(logLines)
 }
 
 // CalculateCosts calculates cost estimates based on traffic analysis

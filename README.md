@@ -157,10 +157,22 @@ This will:
 
 **Example output:**
 ```
+NAT Gateway Topology:
+  nat-1234567890abcdef0 (zonal, vpc-abcd1234)
+
+VPC Endpoint Configuration:
+  Gateway Endpoints:
+    ✗ S3: NOT CONFIGURED
+    ✗ DynamoDB: NOT CONFIGURED
+  ECR Interface Endpoints (Paid):
+    ⚠ ECR API (ecr.api): MISSING
+    ⚠ ECR DKR (ecr.dkr): MISSING
+
 Traffic Analysis:
   Total: 1,234 records, 45.67 GB
   S3: 890 records, 32.10 GB (70.3%)
   DynamoDB: 234 records, 8.45 GB (18.5%)
+  ECR: 100 records, 2.45 GB (5.4%)
   Other: 110 records, 5.12 GB (11.2%)
 
 Cost Savings Estimate:
@@ -184,6 +196,12 @@ terminat scan deep --region <region> --duration <minutes>
 # Demo scan (fake data, no AWS credentials needed)
 terminat scan demo
 
+# Export markdown report to persistent reports/ folder
+terminat scan deep --region us-east-1 --duration 5 --export markdown --output reports/terminat-report-$(date +%Y%m%d-%H%M%S).md
+
+# Skip doctor preflight (enabled by default)
+terminat scan quick --region <region> --doctor=false
+
 # Optional TUI mode
 terminat scan quick --region <region> --ui tui
 terminat scan deep --region <region> --duration <minutes> --ui tui
@@ -197,6 +215,11 @@ terminat scan deep --region us-east-1 --nat-id nat-1234567890abcdef0
 
 - Default mode is serial stream output (`--ui stream`) for `scan quick`, `scan deep`, and `scan demo`.
 - Use `--ui tui` only when you want the interactive full-screen Bubble Tea experience.
+
+### Doctor Preflight
+
+- `scan quick` and `scan deep` run doctor preflight checks by default.
+- Disable only this step with `--doctor=false` when needed.
 
 ### Fast Validation
 
@@ -212,10 +235,10 @@ After a Deep Dive scan, Flow Logs data is retained for your review. Clean it up 
 
 ```bash
 # List log groups
-aws logs describe-log-groups --log-group-name-prefix "/aws/vpc/flowlogs/terminator"
+aws logs describe-log-groups --log-group-name-prefix "/aws/vpc/flowlogs/terminat"
 
 # Delete log group
-terminat cleanup --region us-east-1 --log-group "/aws/vpc/flowlogs/terminator-1234567890"
+terminat cleanup --region us-east-1 --log-group "/aws/vpc/flowlogs/terminat-1234567890"
 ```
 
 ## Understanding the Results
@@ -235,6 +258,10 @@ terminat cleanup --region us-east-1 --log-group "/aws/vpc/flowlogs/terminator-12
 **VPC Gateway Endpoints:**
 - S3 Gateway Endpoint: **FREE** (no hourly or data charges)
 - DynamoDB Gateway Endpoint: **FREE** (no hourly or data charges)
+
+**ECR Interface Endpoints (paid):**
+- Estimated using the scanner's static per-region PrivateLink pricing table (defaults to $0.01 per AZ-hour and $0.01 per GB for most regions).
+- Pricing comes from the `internal/analysis/endpoints.go` table and is treated as an estimate; verify current AWS PrivateLink pricing for your region before provisioning.
 
 **Important Notes:**
 - Cost estimates are based on the traffic sample collected during the scan

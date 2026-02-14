@@ -32,6 +32,8 @@ type EndpointAnalysis struct {
 	Region             string
 	S3Endpoint         *types.VPCEndpoint
 	DynamoEndpoint     *types.VPCEndpoint
+	ECRAPIEndpoint     *types.VPCEndpoint
+	ECRDKREndpoint     *types.VPCEndpoint
 	InterfaceEndpoints []types.VPCEndpoint
 	RouteTables        []types.RouteTable
 	MissingEndpoints   []string
@@ -54,6 +56,27 @@ type MissingRoute struct {
 	RouteTableName string
 	Service        string
 	SubnetIDs      []string
+}
+
+type interfaceEndpointPrice struct {
+	hourlyPerAZ float64
+	dataPerGB   float64
+}
+
+// Interface endpoint pricing by region.
+// AWS PrivateLink pricing differs by region; keep this table explicit for easy updates.
+var interfaceEndpointPricing = map[string]interfaceEndpointPrice{
+	"us-east-1":      {hourlyPerAZ: 0.01, dataPerGB: 0.01},
+	"us-east-2":      {hourlyPerAZ: 0.01, dataPerGB: 0.01},
+	"us-west-1":      {hourlyPerAZ: 0.01, dataPerGB: 0.01},
+	"us-west-2":      {hourlyPerAZ: 0.01, dataPerGB: 0.01},
+	"eu-west-1":      {hourlyPerAZ: 0.01, dataPerGB: 0.01},
+	"eu-west-2":      {hourlyPerAZ: 0.01, dataPerGB: 0.01},
+	"eu-central-1":   {hourlyPerAZ: 0.01, dataPerGB: 0.01},
+	"ap-northeast-1": {hourlyPerAZ: 0.01, dataPerGB: 0.01},
+	"ap-southeast-1": {hourlyPerAZ: 0.01, dataPerGB: 0.01},
+	"ap-southeast-2": {hourlyPerAZ: 0.01, dataPerGB: 0.01},
+	"default":        {hourlyPerAZ: 0.01, dataPerGB: 0.01},
 }
 
 // AnalyzeEndpoints checks VPC endpoint configuration
@@ -79,6 +102,12 @@ func AnalyzeEndpoints(region string, vpcID string, endpoints []types.VPCEndpoint
 		// Collect Interface endpoints
 		if ep.Type == "Interface" {
 			analysis.InterfaceEndpoints = append(analysis.InterfaceEndpoints, *ep)
+			if strings.HasSuffix(ep.ServiceName, ".ecr.api") {
+				analysis.ECRAPIEndpoint = ep
+			}
+			if strings.HasSuffix(ep.ServiceName, ".ecr.dkr") {
+				analysis.ECRDKREndpoint = ep
+			}
 		}
 	}
 
@@ -154,7 +183,7 @@ func AnalyzeEndpoints(region string, vpcID string, endpoints []types.VPCEndpoint
 
 // HasIssues returns true if there are missing endpoints or routes
 func (a *EndpointAnalysis) HasIssues() bool {
-	return len(a.MissingEndpoints) > 0 || len(a.MissingRoutes) > 0
+	return len(a.MissingEndpoints) > 0 || len(a.MissingRoutes) > 0 || a.HasMissingECRInterfaceEndpoints()
 }
 
 // String returns a formatted summary
@@ -178,6 +207,18 @@ func (a *EndpointAnalysis) String() string {
 		b.WriteString("  ✗ DynamoDB: NOT CONFIGURED\n")
 	}
 
+	b.WriteString("\nECR Interface Endpoints (not free):\n")
+	if a.ECRAPIEndpoint != nil {
+		b.WriteString(fmt.Sprintf("  ✓ ECR API: %s\n", a.ECRAPIEndpoint.ID))
+	} else {
+		b.WriteString("  ✗ ECR API: NOT CONFIGURED\n")
+	}
+	if a.ECRDKREndpoint != nil {
+		b.WriteString(fmt.Sprintf("  ✓ ECR DKR: %s\n", a.ECRDKREndpoint.ID))
+	} else {
+		b.WriteString("  ✗ ECR DKR: NOT CONFIGURED\n")
+	}
+
 	// Missing routes
 	if len(a.MissingRoutes) > 0 {
 		b.WriteString("\nRoute Tables Missing VPC Endpoint Routes:\n")
@@ -195,15 +236,7 @@ func (a *EndpointAnalysis) GetCreateEndpointCommands() []string {
 	var commands []string
 
 	// Get all route table IDs that route to NAT
-	var rtIDs []string
-	for _, rt := range a.RouteTables {
-		for _, route := range rt.Routes {
-			if route.TargetType == "nat-gateway" {
-				rtIDs = append(rtIDs, rt.ID)
-				break
-			}
-		}
-	}
+	rtIDs := a.getNATRouteTableIDs()
 	var quotedRTIDs []string
 	for _, id := range rtIDs {
 		quotedRTIDs = append(quotedRTIDs, shellQuote(id))
@@ -213,6 +246,28 @@ func (a *EndpointAnalysis) GetCreateEndpointCommands() []string {
 	for _, svc := range a.MissingEndpoints {
 		cmd := fmt.Sprintf("aws ec2 create-vpc-endpoint \\\n  --vpc-id %s \\\n  --service-name %s \\\n  --route-table-ids %s",
 			shellQuote(a.VPCID), shellQuote(svc), rtIDsStr)
+		commands = append(commands, cmd)
+	}
+
+	// Add ECR Interface endpoint commands (paid endpoints) if missing.
+	subnets := a.getNATSubnetIDs()
+	if len(subnets) == 0 {
+		subnets = []string{"<private-subnet-id>"}
+	}
+	var quotedSubnets []string
+	for _, subnetID := range subnets {
+		quotedSubnets = append(quotedSubnets, shellQuote(subnetID))
+	}
+	subnetIDsStr := strings.Join(quotedSubnets, " ")
+
+	for _, svc := range a.MissingECRInterfaceServiceNames() {
+		cmd := fmt.Sprintf(
+			"aws ec2 create-vpc-endpoint \\\n  --vpc-id %s \\\n  --service-name %s \\\n  --vpc-endpoint-type Interface \\\n  --subnet-ids %s \\\n  --security-group-ids %s \\\n  --private-dns-enabled",
+			shellQuote(a.VPCID),
+			shellQuote(svc),
+			subnetIDsStr,
+			shellQuote("<security-group-id>"),
+		)
 		commands = append(commands, cmd)
 	}
 
@@ -245,6 +300,7 @@ func (a *EndpointAnalysis) GetAddRouteCommands() []string {
 // Interface endpoints cost $0.01/hour per AZ + $0.01/GB data processed
 func (a *EndpointAnalysis) GetInterfaceEndpointCosts() []InterfaceEndpointCost {
 	var costs []InterfaceEndpointCost
+	hourlyPerAZ, _ := a.GetECRInterfaceEndpointPricing()
 
 	for _, ep := range a.InterfaceEndpoints {
 		// Extract service name from full service name
@@ -257,7 +313,7 @@ func (a *EndpointAnalysis) GetInterfaceEndpointCosts() []InterfaceEndpointCost {
 			azCount = 1 // Fallback for Gateway endpoints or missing data
 		}
 
-		hourlyCost := 0.01 * float64(azCount)
+		hourlyCost := hourlyPerAZ * float64(azCount)
 		monthlyCost := hourlyCost * 24 * 30
 
 		costs = append(costs, InterfaceEndpointCost{
@@ -285,6 +341,90 @@ func (a *EndpointAnalysis) GetTotalInterfaceEndpointMonthlyCost() float64 {
 // HasInterfaceEndpoints returns true if there are Interface endpoints
 func (a *EndpointAnalysis) HasInterfaceEndpoints() bool {
 	return len(a.InterfaceEndpoints) > 0
+}
+
+// HasMissingECRInterfaceEndpoints returns true if ECR API or DKR interface endpoints are missing.
+func (a *EndpointAnalysis) HasMissingECRInterfaceEndpoints() bool {
+	return len(a.MissingECRInterfaceServiceNames()) > 0
+}
+
+// MissingECRInterfaceServiceNames returns fully-qualified AWS service names for missing ECR interface endpoints.
+func (a *EndpointAnalysis) MissingECRInterfaceServiceNames() []string {
+	var missing []string
+	if a.ECRAPIEndpoint == nil {
+		missing = append(missing, fmt.Sprintf("com.amazonaws.%s.ecr.api", a.Region))
+	}
+	if a.ECRDKREndpoint == nil {
+		missing = append(missing, fmt.Sprintf("com.amazonaws.%s.ecr.dkr", a.Region))
+	}
+	return missing
+}
+
+// GetECRInterfaceEndpointPricing returns regional pricing for Interface endpoints.
+func (a *EndpointAnalysis) GetECRInterfaceEndpointPricing() (hourlyPerAZ, dataPerGB float64) {
+	price, ok := interfaceEndpointPricing[a.Region]
+	if !ok {
+		price = interfaceEndpointPricing["default"]
+	}
+	return price.hourlyPerAZ, price.dataPerGB
+}
+
+// EstimateECRInterfaceEndpointMonthlyCost returns a monthly estimate for missing ECR interface endpoints.
+func (a *EndpointAnalysis) EstimateECRInterfaceEndpointMonthlyCost(monthlyECRDataGB float64) (fixedMonthly, dataMonthly, totalMonthly float64, azCount int, endpointCount int) {
+	endpointCount = len(a.MissingECRInterfaceServiceNames())
+	if endpointCount == 0 {
+		return 0, 0, 0, 0, 0
+	}
+
+	subnets := a.getNATSubnetIDs()
+	azCount = len(subnets)
+	if azCount == 0 {
+		azCount = 1
+	}
+
+	hourlyPerAZ, dataPerGB := a.GetECRInterfaceEndpointPricing()
+	fixedMonthly = hourlyPerAZ * float64(azCount) * float64(endpointCount) * 24 * 30
+	dataMonthly = monthlyECRDataGB * dataPerGB
+	totalMonthly = fixedMonthly + dataMonthly
+	return fixedMonthly, dataMonthly, totalMonthly, azCount, endpointCount
+}
+
+func (a *EndpointAnalysis) getNATRouteTableIDs() []string {
+	var rtIDs []string
+	for _, rt := range a.RouteTables {
+		for _, route := range rt.Routes {
+			if route.TargetType == "nat-gateway" {
+				rtIDs = append(rtIDs, rt.ID)
+				break
+			}
+		}
+	}
+	return rtIDs
+}
+
+func (a *EndpointAnalysis) getNATSubnetIDs() []string {
+	seen := make(map[string]bool)
+	var subnets []string
+	for _, rt := range a.RouteTables {
+		routesToNAT := false
+		for _, route := range rt.Routes {
+			if route.TargetType == "nat-gateway" && route.DestinationCIDR == "0.0.0.0/0" {
+				routesToNAT = true
+				break
+			}
+		}
+		if !routesToNAT {
+			continue
+		}
+		for _, subnetID := range rt.Subnets {
+			if subnetID == "" || seen[subnetID] {
+				continue
+			}
+			seen[subnetID] = true
+			subnets = append(subnets, subnetID)
+		}
+	}
+	return subnets
 }
 
 // AnalyzeAllVPCEndpoints runs quick scan analysis on all VPCs with NAT Gateways

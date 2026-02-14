@@ -10,11 +10,11 @@ Complete guide for running termiNATor in your AWS environment to identify NAT Ga
 # Option 1: Install from source
 git clone https://github.com/doitintl/terminator.git
 cd terminator
-go build -o terminator
+go build -o terminat
 
 # Option 2: Download binary (when available)
-# curl -L https://github.com/doitintl/terminator/releases/latest/download/terminator-$(uname -s)-$(uname -m) -o terminator
-# chmod +x terminator
+# curl -L https://github.com/doitintl/terminator/releases/latest/download/terminat-$(uname -s)-$(uname -m) -o terminat
+# chmod +x terminat
 ```
 
 ### 2. Configure AWS Credentials
@@ -91,6 +91,7 @@ Analyze real traffic patterns to calculate actual savings:
 
 By default, `scan quick` and `scan deep` use serial stream output (`--ui stream`) so logs stay append-only.
 Use `--ui tui` for the interactive full-screen Bubble Tea interface.
+`scan quick` and `scan deep` also run doctor preflight checks by default; use `--doctor=false` to skip only that step.
 
 **What it does:**
 - ✅ Creates temporary VPC Flow Logs (you approve first)
@@ -116,7 +117,7 @@ The following AWS resources will be created:
    → Flow Logs will be AUTOMATICALLY STOPPED after analysis
 
 2. CloudWatch Log Group
-   • /aws/vpc/flowlogs/terminator-1234567890
+   • /aws/vpc/flowlogs/terminat-1234567890
    → You'll be asked whether to keep or delete after scan
 
 📊 Estimated Costs:
@@ -134,14 +135,25 @@ Proceed with scan? [Y/n]
 **Final report:**
 ```
 ═══════════════════════════════════════════════════════════════
+                    NAT GATEWAY TOPOLOGY
+═══════════════════════════════════════════════════════════════
+
+NAT Gateway | Mode   | VPC
+nat-0abc... | zonal  | vpc-0dd4a2ec9743c9a76
+
+═══════════════════════════════════════════════════════════════
                   VPC ENDPOINT CONFIGURATION
 ═══════════════════════════════════════════════════════════════
 
 VPC: vpc-0dd4a2ec9743c9a76
-
 Gateway Endpoints:
   ✗ S3: NOT CONFIGURED
   ✗ DynamoDB: NOT CONFIGURED
+
+ECR Interface Endpoints (Paid):
+  ⚠ ECR API (ecr.api): MISSING
+  ⚠ ECR DKR (ecr.dkr): MISSING
+  Regional pricing (estimate): $0.0100 per AZ-hour + $0.0100 per GB
 
 ═══════════════════════════════════════════════════════════════
                       TRAFFIC ANALYSIS
@@ -154,6 +166,7 @@ Traffic by Service:
   ─────────── ─────────     ──────────
   S3          2.0 TB        38.1%
   DynamoDB    517.8 GB      9.6%
+  ECR         1.2 TB        22.1%
   Other       2.8 TB        52.3%
 
 Top Source IPs:
@@ -171,6 +184,8 @@ Projected Monthly Costs:
   Current NAT Gateway cost:     $2,051,199.38/month
   Potential S3 savings:         $781,287.31/month
   Potential DynamoDB savings:   $196,602.63/month
+  ECR traffic cost over NAT:    $141.05/month
+  Estimated ECR endpoint cost:  $45.74/month
   ─────────────────────────────────────────
   TOTAL POTENTIAL SAVINGS:      $977,889.93/month ($11,734,679.21/year)
 
@@ -190,10 +205,27 @@ aws ec2 create-vpc-endpoint \
   --service-name com.amazonaws.us-east-1.dynamodb \
   --route-table-ids rtb-0b83dfd7b61cda66e
 
+aws ec2 create-vpc-endpoint \
+  --vpc-id vpc-0dd4a2ec9743c9a76 \
+  --service-name com.amazonaws.us-east-1.ecr.api \
+  --vpc-endpoint-type Interface \
+  --subnet-ids subnet-0123abc \
+  --security-group-ids sg-0123abc \
+  --private-dns-enabled
+
+aws ec2 create-vpc-endpoint \
+  --vpc-id vpc-0dd4a2ec9743c9a76 \
+  --service-name com.amazonaws.us-east-1.ecr.dkr \
+  --vpc-endpoint-type Interface \
+  --subnet-ids subnet-0123abc \
+  --security-group-ids sg-0123abc \
+  --private-dns-enabled
+
 ⚠️  DISCLAIMERS:
    • Cost estimates based on traffic sample collected
    • Actual costs may vary based on traffic patterns
    • Gateway VPC Endpoints for S3 and DynamoDB are FREE
+   • ECR Interface Endpoint pricing shown is an estimate from built-in regional defaults
 ```
 
 ## Advanced Usage
@@ -261,7 +293,7 @@ After Deep Dive scan, you'll be asked about CloudWatch logs:
 ```
 CloudWatch Log Group Cleanup
 
-Log Group: /aws/vpc/flowlogs/terminator-1234567890
+Log Group: /aws/vpc/flowlogs/terminat-1234567890
 
 This log group contains the collected traffic data.
 • Keep it to analyze traffic patterns in CloudWatch Logs Insights
@@ -347,6 +379,10 @@ aws iam get-role --role-name termiNATor-FlowLogsRole
 **VPC Gateway Endpoints:**
 - S3 Gateway Endpoint: **FREE** (no charges)
 - DynamoDB Gateway Endpoint: **FREE** (no charges)
+
+**ECR Interface Endpoints (paid):**
+- Estimated using the scanner's static per-region PrivateLink pricing table (defaults to $0.01 per AZ-hour and $0.01 per GB for most regions).
+- Pricing comes from `internal/analysis/endpoints.go` and should be verified against current AWS PrivateLink pricing in your region.
 
 **Savings = NAT Gateway data processing costs for S3/DynamoDB traffic**
 

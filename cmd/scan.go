@@ -18,6 +18,8 @@ var (
 	duration               int
 	natIDs                 []string
 	vpcID                  string
+	quickDoctor            bool
+	deepDoctor             bool
 	deepUIMode             string
 	quickUIMode            string
 	demoUIMode             string
@@ -83,6 +85,8 @@ func init() {
 	deepCmd.Flags().IntVarP(&duration, "duration", "d", 15, "Flow Log collection duration in minutes (max 60)")
 	deepCmd.Flags().StringSliceVar(&natIDs, "nat-gateway-ids", []string{}, "Specific NAT Gateway IDs to analyze (optional)")
 	deepCmd.Flags().StringVar(&vpcID, "vpc-id", "", "Filter NAT Gateways by VPC ID (optional)")
+	deepCmd.Flags().BoolVar(&deepDoctor, "doctor", true, "Run doctor preflight checks before scan")
+	quickCmd.Flags().BoolVar(&quickDoctor, "doctor", true, "Run doctor preflight checks before scan")
 	deepCmd.Flags().StringVar(&deepUIMode, "ui", "stream", "UI mode [stream|tui]")
 	quickCmd.Flags().StringVar(&quickUIMode, "ui", "stream", "UI mode [stream|tui]")
 	demoCmd.Flags().StringVar(&demoUIMode, "ui", "stream", "UI mode [stream|tui]")
@@ -175,6 +179,12 @@ func runQuickScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create scanner")
 	}
 
+	if quickDoctor {
+		if err := runDoctorPreflight(ctx, scanner, selectedRegion, selectedProfile, false); err != nil {
+			return err
+		}
+	}
+
 	// Run quick scan with UI
 	return ui.RunQuickScan(ctx, scanner, quickUIMode)
 }
@@ -211,6 +221,12 @@ func runDeepScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create scanner")
 	}
 
+	if deepDoctor {
+		if err := runDoctorPreflight(ctx, scanner, selectedRegion, selectedProfile, true); err != nil {
+			return err
+		}
+	}
+
 	// Run deep scan with UI
 	return ui.RunDeepScan(ctx, scanner, selectedRegion, duration, natIDs, vpcID, deepUIMode, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerContext)
 }
@@ -229,4 +245,27 @@ func isValidUIMode(mode string) bool {
 	default:
 		return false
 	}
+}
+
+func runDoctorPreflight(ctx context.Context, scanner *core.Scanner, selectedRegion, selectedProfile string, requiresFlowLogsRole bool) error {
+	fmt.Fprintln(os.Stderr, "🩺 Running doctor preflight checks...")
+	fmt.Fprintf(os.Stderr, "✓ Region: %s\n", selectedRegion)
+	if selectedProfile != "" {
+		fmt.Fprintf(os.Stderr, "✓ AWS profile: %s\n", selectedProfile)
+	} else {
+		fmt.Fprintln(os.Stderr, "✓ AWS profile: default credential chain")
+	}
+	fmt.Fprintf(os.Stderr, "✓ AWS authentication: account %s\n", scanner.GetAccountID())
+
+	if requiresFlowLogsRole {
+		roleARN := fmt.Sprintf("arn:aws:iam::%s:role/termiNATor-FlowLogsRole", scanner.GetAccountID())
+		if err := scanner.ValidateFlowLogsRole(ctx, roleARN); err != nil {
+			return fmt.Errorf("doctor failed: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "✓ Flow Logs role: %s\n", roleARN)
+	}
+
+	fmt.Fprintln(os.Stderr, "✓ Doctor preflight passed")
+	fmt.Fprintln(os.Stderr, "")
+	return nil
 }

@@ -52,7 +52,7 @@ echo ""
 
 # Step 2: Build binary
 echo "🔨 Step 2/7: Building termiNATor..."
-go build -o terminator .
+go build -o terminat .
 echo "✓ Build complete"
 echo ""
 
@@ -81,12 +81,33 @@ echo "   Total: ~11 minutes"
 echo ""
 
 # Build scan command with optional profile
-SCAN_CMD="./terminat scan deep --region $AWS_REGION --duration 5 --auto-approve --auto-cleanup"
+mkdir -p reports
+SCAN_REPORT_MD="reports/e2e-deep-scan-$(date +%Y%m%d-%H%M%S).md"
+SCAN_CMD="./terminat scan deep --region $AWS_REGION --duration 5 --auto-approve --auto-cleanup --export markdown --output $SCAN_REPORT_MD"
 if [ -n "$AWS_PROFILE" ]; then
     SCAN_CMD="$SCAN_CMD --profile $AWS_PROFILE"
 fi
 
-$SCAN_CMD
+SCAN_LOG="test/results/deep-scan-output.log"
+echo "Scan output will be saved to: $SCAN_LOG"
+echo "Markdown report will be saved to: $SCAN_REPORT_MD"
+set +e
+$SCAN_CMD 2>&1 | tee "$SCAN_LOG"
+SCAN_EXIT=${PIPESTATUS[0]}
+set -e
+if [ $SCAN_EXIT -ne 0 ]; then
+    echo "❌ Deep scan failed (exit code: $SCAN_EXIT)"
+    exit $SCAN_EXIT
+fi
+
+# Fail fast on no-traffic regressions
+if grep -q "Analysis complete: records=0" "$SCAN_LOG" || grep -q "No traffic records were collected in this run" "$SCAN_LOG"; then
+    echo "❌ Deep scan collected zero traffic records."
+    echo "   This indicates a regression or Flow Logs/query issue."
+    echo "   Debug command:"
+    echo "   ./scripts/check-flowlogs-data.sh \$(grep -o '/aws/vpc/flowlogs/terminat-[0-9]*' \"$SCAN_LOG\" | tail -1)"
+    exit 1
+fi
 echo ""
 
 # Step 6: Stop traffic
@@ -99,7 +120,7 @@ echo "🧹 Step 7/7: Cleaning up test infrastructure..."
 echo "   This deletes: CloudFormation stack, S3 bucket, ECR images"
 echo "   Estimated time: 2-3 minutes"
 echo ""
-./test/scripts/cleanup.sh
+./test/scripts/cleanup.sh --yes
 echo ""
 
 echo "✅ E2E Test Complete!"

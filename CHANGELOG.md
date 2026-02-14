@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-02-14
+
+### Added
+- Doctor preflight now runs by default for `scan quick` and `scan deep`, with opt-out via `--doctor=false`.
+- Explicit ECR interface endpoint analysis in reports, including endpoint status, remediation commands, and regional price estimate (PrivateLink table).
+- NAT topology section in markdown reports showing gateway mode (`zonal`/`regional`).
+- New analysis tests for ECR interface endpoint remediation and pricing behavior in `internal/analysis/endpoints_test.go`.
+
+### Changed
+- Stream output is now the default UX; full-screen Bubble Tea UI is opt-in via `--ui tui`.
+- E2E script now exports markdown reports into `reports/` and runs cleanup non-interactively (`--yes`) for automation.
+- Export default filenames are now `terminat-report-*` for consistency.
+
+### Fixed
+- Fixed zero-price/missing-volume regressions by hardening aggregated query parsing and adding raw-message fallback analysis when aggregated parsing yields zero records (Issue #30).
+- Added pre-analysis wait for non-`NODATA`/`SKIPDATA` flow-log events before running Insights query to reduce empty-result races (Issue #25).
+- Prevented terminal output loss for default runs by avoiding alt-screen/TUI unless explicitly requested (Issue #32).
+- Cleaned remaining docs/examples/scripts drift from `terminator` to `terminat` in touched operational paths.
+
+### Verification
+- `go test ./...` passes.
+- E2E deep scan produced non-zero traffic records and markdown report persisted under `reports/`.
+
 ### Added
 - Initial release of termiNATor
 - Quick Scan: Instant VPC configuration analysis

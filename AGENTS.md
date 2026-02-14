@@ -338,7 +338,7 @@ go test -run TestClassifyIP ./internal/analysis/
 
 ```bash
 # Get log group from scan output
-LOG_GROUP="/aws/vpc/flowlogs/terminator-1234567890"
+LOG_GROUP="/aws/vpc/flowlogs/terminat-1234567890"
 
 # Query directly
 aws logs start-query \
@@ -576,7 +576,7 @@ go test ./...                               # Run all tests
 ./terminat scan deep --region us-east-1 --nat-gateway-ids nat-xxx,nat-yyy
 
 # Export report
-./terminat scan deep --region us-east-1 --export markdown --output report.md
+./terminat scan deep --region us-east-1 --export markdown --output reports/terminat-report-$(date +%Y%m%d-%H%M%S).md
 
 # With DataHub integration
 ./terminat scan deep --region us-east-1 --doit-datahub-api-key KEY --doit-customer-context CTX
@@ -593,7 +593,7 @@ go test ./...                               # Run all tests
 aws ec2 describe-flow-logs --region us-east-1
 
 # Check CloudWatch Log Groups
-aws logs describe-log-groups --log-group-name-prefix "/aws/vpc/flowlogs/terminator"
+aws logs describe-log-groups --log-group-name-prefix "/aws/vpc/flowlogs/terminat"
 
 # Check NAT Gateways
 aws ec2 describe-nat-gateways --region us-east-1
@@ -643,7 +643,7 @@ Before submitting PR:
 2. **Check CloudWatch Logs**: Raw data shows what Flow Logs captured
 3. **Verify AWS IP ranges**: Download and inspect manually
 4. **Test classifier**: Unit test with known IPs (including EC2 ranges for ECR)
-5. **Check cache**: `~/.terminator/cache/` for IP ranges cache
+5. **Check cache**: `~/.terminat/cache/` for IP ranges cache
 
 ### When Contributing
 
@@ -662,9 +662,9 @@ Before submitting PR:
 - Verify EC2 IP ranges loaded in classifier
 
 **Cache Issues**:
-- Check `~/.terminator/cache/` directory exists and is writable
+- Check `~/.terminat/cache/` directory exists and is writable
 - Verify timestamp file format (RFC3339)
-- Delete cache to force refresh: `rm -rf ~/.terminator/cache/`
+- Delete cache to force refresh: `rm -rf ~/.terminat/cache/`
 
 **E2E Test Failures**:
 - Ensure `STACK_NAME` environment variable is set

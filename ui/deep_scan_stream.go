@@ -489,7 +489,7 @@ func (r *streamDeepScanRunner) exportIfRequested() error {
 		return nil
 	}
 
-	rep := report.New(r.region, r.scanner.GetAccountID(), r.duration, r.trafficStats, r.costEstimate, r.endpointAnalysis)
+	rep := report.New(r.region, r.scanner.GetAccountID(), r.duration, r.nats, r.trafficStats, r.costEstimate, r.endpointAnalysis)
 	filename := r.outputFile
 	if filename == "" {
 		timestamp := time.Now().Format("20060102-150405")
@@ -497,7 +497,7 @@ func (r *streamDeepScanRunner) exportIfRequested() error {
 		if r.exportFormat == "json" {
 			ext = ".json"
 		}
-		filename = fmt.Sprintf("terminator-report-%s%s", timestamp, ext)
+		filename = fmt.Sprintf("terminat-report-%s%s", timestamp, ext)
 	}
 
 	var err error
