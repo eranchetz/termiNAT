@@ -265,12 +265,12 @@ Resources:
                 echo "Bucket: $BUCKET, Table: $TABLE, Repo: $REPO"
                 
                 # ECR login
-                aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $REPO
+                REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+                aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $REPO
                 
-                # Create a minimal test image
+                # Create a minimal test image base
                 mkdir -p /tmp/docker-test
                 echo "FROM public.ecr.aws/lambda/python:3.12" > /tmp/docker-test/Dockerfile
-                echo "CMD echo test" >> /tmp/docker-test/Dockerfile
                 
                 END_TIME=$(($(date +%s) + $DURATION * 60))
                 
@@ -286,11 +286,15 @@ Resources:
                     aws dynamodb scan --table-name $TABLE --max-items 10 >/dev/null 2>&1
                   done
                   
-                  # ECR traffic - push image every iteration
+                  # ECR traffic - push image every iteration with new layer
                   TAG=$(date +%s)
+                  dd if=/dev/urandom of=/tmp/docker-test/random-data-$TAG.bin bs=1M count=5 2>/dev/null
+                  echo "FROM public.ecr.aws/lambda/python:3.12" > /tmp/docker-test/Dockerfile
+                  echo "COPY random-data-$TAG.bin /var/task/" >> /tmp/docker-test/Dockerfile
                   docker build -t $REPO:$TAG /tmp/docker-test >/dev/null 2>&1
                   docker push $REPO:$TAG >/dev/null 2>&1
                   docker rmi $REPO:$TAG >/dev/null 2>&1
+                  rm -f /tmp/docker-test/random-data-$TAG.bin
                   
                   echo "Completed batch at $(date)"
                   sleep 10

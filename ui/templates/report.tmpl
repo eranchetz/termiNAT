@@ -108,7 +108,7 @@ Total Traffic: {{.TrafficStats.TotalRecords}} records, {{printf "%.2f" .TotalTra
 NAT Gateway Data Processing: ${{printf "%.4f" .CostEstimate.NATGatewayPricePerGB}} per GB
 
 {{green "Projected Monthly Costs:"}}
-  Current NAT Gateway cost:     {{currency .CostEstimate.CurrentMonthlyCost}}/month
+  NAT Gateway Data Processing Cost:     {{currency .CostEstimate.CurrentMonthlyCost}}/month
   Potential S3 savings:         {{currency .CostEstimate.S3SavingsMonthly}}/month
   Potential DynamoDB savings:   {{currency .CostEstimate.DynamoSavingsMonthly}}/month
 {{- if gt .ECRCost 0.0}}

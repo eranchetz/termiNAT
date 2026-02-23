@@ -175,7 +175,7 @@ func (r *Report) ToMarkdown() string {
 
 		b.WriteString("| Metric | Amount |\n")
 		b.WriteString("|--------|--------|\n")
-		b.WriteString(fmt.Sprintf("| Current NAT Gateway Cost | $%.2f/month |\n", r.CostEstimate.CurrentMonthlyCost))
+		b.WriteString(fmt.Sprintf("| NAT Gateway Data Processing Cost | $%.2f/month |\n", r.CostEstimate.CurrentMonthlyCost))
 		b.WriteString(fmt.Sprintf("| S3 Endpoint Savings | $%.2f/month |\n", r.CostEstimate.S3SavingsMonthly))
 		b.WriteString(fmt.Sprintf("| DynamoDB Endpoint Savings | $%.2f/month |\n", r.CostEstimate.DynamoSavingsMonthly))
 		if ecrCost := r.estimateMonthlyECRNATCost(); ecrCost > 0 {

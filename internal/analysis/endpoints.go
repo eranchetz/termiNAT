@@ -531,6 +531,45 @@ func AnalyzeAllVPCEndpoints(ctx context.Context, scanner interface {
 				})
 			}
 		}
+		// Check for ECR Interface endpoints
+		hasECRAPI := false
+		hasECRDKR := false
+		for _, ep := range endpoints {
+			if ep.Type == "Interface" {
+				if strings.HasSuffix(ep.ServiceName, ".ecr.api") {
+					hasECRAPI = true
+				}
+				if strings.HasSuffix(ep.ServiceName, ".ecr.dkr") {
+					hasECRDKR = true
+				}
+			}
+		}
+
+		if !hasECRAPI {
+			findings = append(findings, types.Finding{
+				Type:        "missing-endpoint",
+				Severity:    "medium",
+				Title:       "Missing ECR API Interface Endpoint",
+				Description: fmt.Sprintf("VPC %s has NAT Gateway(s) but no ECR API interface endpoint", vpcID),
+				VPCID:       vpcID,
+				Service:     "ECR",
+				Action:      "Create ECR API Interface VPC endpoint (Note: Interface endpoints incur hourly charges)",
+				Impact:      "ECR API traffic is going through NAT Gateway, incurring data processing charges",
+			})
+		}
+
+		if !hasECRDKR {
+			findings = append(findings, types.Finding{
+				Type:        "missing-endpoint",
+				Severity:    "medium",
+				Title:       "Missing ECR DKR Interface Endpoint",
+				Description: fmt.Sprintf("VPC %s has NAT Gateway(s) but no ECR DKR interface endpoint", vpcID),
+				VPCID:       vpcID,
+				Service:     "ECR",
+				Action:      "Create ECR DKR Interface VPC endpoint (Note: Interface endpoints incur hourly charges)",
+				Impact:      "ECR Docker traffic is going through NAT Gateway, incurring data processing charges",
+			})
+		}
 	}
 
 	return findings

@@ -456,7 +456,7 @@ func (r *streamDeepScanRunner) renderFinalSummary() {
 	if r.costEstimate != nil {
 		r.logLine("\nCost Estimate (projected from sample)")
 		r.logLine("  - NAT data processing rate: $%.4f per GB", r.costEstimate.NATGatewayPricePerGB)
-		r.logLine("  - Current NAT cost: $%.2f/month", r.costEstimate.CurrentMonthlyCost)
+		r.logLine("  - NAT Gateway Data Processing Cost: $%.2f/month", r.costEstimate.CurrentMonthlyCost)
 		r.logLine("  - S3 savings potential: $%.2f/month", r.costEstimate.S3SavingsMonthly)
 		r.logLine("  - DynamoDB savings potential: $%.2f/month", r.costEstimate.DynamoSavingsMonthly)
 		r.logLine("  - Total savings potential: $%.2f/month ($%.2f/year)", r.costEstimate.TotalSavingsMonthly, r.costEstimate.TotalSavingsMonthly*12)

@@ -15,6 +15,8 @@ var rootCmd = &cobra.Command{
 	Long: `termiNATor helps AWS customers identify and quantify avoidable NAT Gateway 
 spend caused by workloads using NAT to reach AWS services when VPC endpoints 
 could be used instead.`,
+	SilenceErrors: true,
+	SilenceUsage:  true,
 }
 
 func SetVersion(v string) {
