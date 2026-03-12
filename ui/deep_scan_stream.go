@@ -139,6 +139,14 @@ func (r *streamDeepScanRunner) run() error {
 		return err
 	}
 
+	// Wait briefly for CloudWatch to drain in-flight writes before deleting the log group.
+	// Deleting immediately after stopping flow logs can cause the API to return success
+	// but defer the actual deletion until all buffered events are flushed.
+	select {
+	case <-time.After(15 * time.Second):
+	case <-r.ctx.Done():
+	}
+
 	if err := r.handleLogGroupCleanup(); err != nil {
 		return err
 	}
@@ -272,7 +280,7 @@ func (r *streamDeepScanRunner) promptFlowLogsApproval() (bool, error) {
 	} else {
 		r.logLine("  - Estimated ingestion cost: ~$0.50 per GB")
 	}
-	r.logLine("  - Total scan time estimate: %d minutes (%d startup + %d collection)", r.duration+5, 5, r.duration)
+	r.logLine("  - Total scan time estimate: up to %d minutes (~5 startup + %d collection)", r.duration+5, r.duration)
 	return r.confirm("Proceed with scan?", true)
 }
 

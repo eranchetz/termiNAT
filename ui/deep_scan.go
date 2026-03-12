@@ -507,14 +507,14 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *deepScanModel) View() string {
 	if m.err != nil {
-		return errorStyle.Render(fmt.Sprintf("Error: %v\n", m.err))
+		return errorStyle.Render(fmt.Sprintf("Error: %v", m.err)) + "\n"
 	}
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("termiNATor - Deep Dive Scan"))
 	b.WriteString("\n\n")
-	b.WriteString(infoStyle.Render(fmt.Sprintf("Region: %s  |  Account: %s  |  Elapsed: %s\n\n",
-		m.region, m.accountID, formatDuration(time.Since(m.startTime)))))
+	b.WriteString(infoStyle.Render(fmt.Sprintf("Region: %s  |  Account: %s  |  Elapsed: %s",
+		m.region, m.accountID, formatDuration(time.Since(m.startTime)))) + "\n\n")
 
 	switch m.phase {
 	case phaseInit, phaseDiscovering:
@@ -577,10 +577,10 @@ func (m *deepScanModel) renderNATSelection() string {
 
 func (m *deepScanModel) renderApprovalPrompt() string {
 	var b strings.Builder
-	b.WriteString(warningStyle.Render("⚠️  RESOURCE CREATION APPROVAL REQUIRED\n\n"))
+	b.WriteString(warningStyle.Render("⚠️  RESOURCE CREATION APPROVAL REQUIRED") + "\n\n")
 	b.WriteString("The following AWS resources will be created:\n\n")
 
-	b.WriteString(stepStyle.Render("1. VPC Flow Logs (temporary)\n"))
+	b.WriteString(stepStyle.Render("1. VPC Flow Logs (temporary)") + "\n")
 	for _, nat := range m.nats {
 		mode := nat.AvailabilityMode
 		if mode == "" {
@@ -588,13 +588,13 @@ func (m *deepScanModel) renderApprovalPrompt() string {
 		}
 		b.WriteString(fmt.Sprintf("   • NAT Gateway: %s (%s, VPC: %s)\n", nat.ID, mode, nat.VPCID))
 	}
-	b.WriteString(infoStyle.Render("   → Flow Logs will be AUTOMATICALLY STOPPED after analysis\n"))
+	b.WriteString(infoStyle.Render("   → Flow Logs will be AUTOMATICALLY STOPPED after analysis") + "\n")
 
-	b.WriteString(stepStyle.Render("\n2. CloudWatch Log Group\n"))
+	b.WriteString("\n" + stepStyle.Render("2. CloudWatch Log Group") + "\n")
 	b.WriteString(fmt.Sprintf("   • %s\n", m.logGroupName))
-	b.WriteString(infoStyle.Render("   → You'll be asked whether to keep or delete after scan\n"))
+	b.WriteString(infoStyle.Render("   → You'll be asked whether to keep or delete after scan") + "\n")
 
-	b.WriteString(stepStyle.Render("\n📊 Estimated Costs:\n"))
+	b.WriteString("\n" + stepStyle.Render("📊 Estimated Costs:") + "\n")
 	if m.estimatedScanCostGB > 0 {
 		b.WriteString(fmt.Sprintf("   • Estimated flow log data: ~%.2f GB (based on current NAT throughput)\n", m.estimatedScanCostGB))
 		b.WriteString(fmt.Sprintf("   • Flow Logs ingestion (~$0.50/GB): ~$%.2f\n", m.estimatedScanCostUSD))
@@ -605,8 +605,8 @@ func (m *deepScanModel) renderApprovalPrompt() string {
 		b.WriteString("   • For a 5-minute scan, typical cost: < $0.10\n")
 	}
 
-	b.WriteString(stepStyle.Render(fmt.Sprintf("\n⏱️  Total scan time: %d minutes\n", m.duration+5)))
-	b.WriteString("   • 5 min startup delay (Flow Logs initialization)\n")
+	b.WriteString("\n" + stepStyle.Render(fmt.Sprintf("⏱️  Total scan time: up to %d minutes", m.duration+5)) + "\n")
+	b.WriteString("   • Up to 5 min startup delay (Flow Logs initialization)\n")
 	b.WriteString(fmt.Sprintf("   • %d min traffic collection\n\n", m.duration))
 
 	b.WriteString(highlightStyle.Render("Proceed with scan? [Y/n] "))
@@ -651,7 +651,7 @@ func (m *deepScanModel) renderProgress() string {
 	b.WriteString(fmt.Sprintf("  [%s] %.0f%%\n\n", bar, progress*100))
 	b.WriteString(fmt.Sprintf("  ⏱️  Elapsed: %s  |  Remaining: %s\n\n", formatDuration(elapsed), formatDuration(remaining)))
 
-	b.WriteString(infoStyle.Render("Monitoring:\n"))
+	b.WriteString(infoStyle.Render("Monitoring:") + "\n")
 	for _, nat := range m.nats {
 		b.WriteString(fmt.Sprintf("  • %s (%s)\n", nat.ID, nat.VPCID))
 	}
@@ -664,9 +664,9 @@ func (m *deepScanModel) renderProgress() string {
 
 func (m *deepScanModel) renderCleanupPrompt() string {
 	var b strings.Builder
-	b.WriteString(successStyle.Render("✓ Flow Logs STOPPED\n\n"))
+	b.WriteString(successStyle.Render("✓ Flow Logs STOPPED") + "\n\n")
 
-	b.WriteString(warningStyle.Render("CloudWatch Log Group Cleanup\n\n"))
+	b.WriteString(warningStyle.Render("CloudWatch Log Group Cleanup") + "\n\n")
 	b.WriteString(fmt.Sprintf("Log Group: %s\n\n", m.logGroupName))
 	b.WriteString("This log group contains the collected traffic data.\n")
 	b.WriteString("• Keep it to analyze traffic patterns in CloudWatch Logs Insights\n")

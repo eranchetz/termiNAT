@@ -219,6 +219,9 @@ Resources:
       SubnetId: !Ref PrivateSubnet
       SecurityGroupIds:
         - !Ref InstanceSecurityGroup
+      MetadataOptions:
+        HttpTokens: optional
+        HttpEndpoint: enabled
       UserData:
         Fn::Base64:
           Fn::Join:
@@ -231,83 +234,64 @@ Resources:
                 systemctl enable docker
                 usermod -a -G docker ec2-user
                 
-                # Set bucket, table, and repo names
-                BUCKET_NAME='
-              - !Ref TestBucket
-              - |
-                '
-                TABLE_NAME='
-              - !Ref TestTable
-              - |
-                '
-                REPO_URI='
-              - !GetAtt TestRepository.RepositoryUri
-              - |
-                '
-                
                 # Create test script
                 cat > /home/ec2-user/generate-traffic.sh << 'EOFSCRIPT'
                 #!/bin/bash
                 DURATION=${1:-5}
-                S3_REQUESTS=${2:-100}
+                S3_REQUESTS=${2:-10}
                 DDB_REQUESTS=${3:-50}
                 BUCKET=${4}
                 TABLE=${5}
                 REPO=${6}
-                
-                # Use defaults if not provided
-                BUCKET=${BUCKET:-$BUCKET_NAME}
-                TABLE=${TABLE:-$TABLE_NAME}
-                REPO=${REPO:-$REPO_URI}
-                
+
+                if [ -z "$BUCKET" ] || [ -z "$TABLE" ] || [ -z "$REPO" ]; then
+                    echo "Usage: $0 <duration_min> <s3_batches> <ddb_requests> <bucket> <table> <repo>"
+                    echo "Get values from: aws cloudformation describe-stacks --stack-name STACK_NAME --query 'Stacks[0].Outputs'"
+                    exit 1
+                fi
+
                 echo "Generating test traffic for $DURATION minutes..."
-                echo "S3 requests: $S3_REQUESTS, DynamoDB requests: $DDB_REQUESTS"
+                echo "S3 batches: $S3_REQUESTS, DynamoDB requests: $DDB_REQUESTS"
                 echo "Bucket: $BUCKET, Table: $TABLE, Repo: $REPO"
-                
+
                 # ECR login
-                REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+                TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+                REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
                 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $REPO
-                
-                # Create a minimal test image base
+
+                # Create scratch-based Dockerfile (no base image pull = no public ECR traffic)
                 mkdir -p /tmp/docker-test
-                echo "FROM public.ecr.aws/lambda/python:3.12" > /tmp/docker-test/Dockerfile
-                
+
                 END_TIME=$(($(date +%s) + $DURATION * 60))
-                
+
                 while [ $(date +%s) -lt $END_TIME ]; do
-                  # S3 traffic
+                  # S3 traffic - sync all test files in one process (avoids per-call boto3 overhead)
                   for i in $(seq 1 $S3_REQUESTS); do
-                    aws s3 cp s3://$BUCKET/test-file.bin /tmp/test-$i.bin 2>/dev/null
-                    rm -f /tmp/test-$i.bin
+                    aws s3 sync s3://$BUCKET/ /tmp/s3-test/ 2>/dev/null || true
+                    rm -rf /tmp/s3-test/
                   done
-                  
-                  # DynamoDB traffic
+
+                  # DynamoDB traffic - scan full table (100 items x 1KB payload each)
                   for i in $(seq 1 $DDB_REQUESTS); do
-                    aws dynamodb scan --table-name $TABLE --max-items 10 >/dev/null 2>&1
+                    aws dynamodb scan --table-name $TABLE >/dev/null 2>&1
                   done
-                  
-                  # ECR traffic - push image every iteration with new layer
+
+                  # ECR traffic - push scratch image with random layer (no public ECR pull)
                   TAG=$(date +%s)
-                  dd if=/dev/urandom of=/tmp/docker-test/random-data-$TAG.bin bs=1M count=5 2>/dev/null
-                  echo "FROM public.ecr.aws/lambda/python:3.12" > /tmp/docker-test/Dockerfile
-                  echo "COPY random-data-$TAG.bin /var/task/" >> /tmp/docker-test/Dockerfile
+                  dd if=/dev/urandom of=/tmp/docker-test/data-$TAG.bin bs=1M count=20 2>/dev/null
+                  printf 'FROM scratch\nADD data-%s.bin /data.bin\n' "$TAG" > /tmp/docker-test/Dockerfile
                   docker build -t $REPO:$TAG /tmp/docker-test >/dev/null 2>&1
                   docker push $REPO:$TAG >/dev/null 2>&1
                   docker rmi $REPO:$TAG >/dev/null 2>&1
-                  rm -f /tmp/docker-test/random-data-$TAG.bin
-                  
+                  rm -f /tmp/docker-test/data-$TAG.bin
+
                   echo "Completed batch at $(date)"
-                  sleep 10
+                  sleep 2
                 done
-                
+
                 echo "Traffic generation complete"
                 EOFSCRIPT
-                
-                # Make script use the bucket, table, and repo names by default
-                sed -i "s|BUCKET_NAME|$BUCKET_NAME|g" /home/ec2-user/generate-traffic.sh
-                sed -i "s|TABLE_NAME|$TABLE_NAME|g" /home/ec2-user/generate-traffic.sh
-                sed -i "s|REPO_URI|$REPO_URI|g" /home/ec2-user/generate-traffic.sh
-                
+
                 chmod +x /home/ec2-user/generate-traffic.sh
                 chown ec2-user:ec2-user /home/ec2-user/generate-traffic.sh
       Tags:
@@ -365,7 +349,7 @@ Resources:
       Runtime: python3.12
       Handler: index.handler
       Role: !GetAtt PopulateTestDataRole.Arn
-      Timeout: 60
+      Timeout: 120
       Code:
         ZipFile: |
           import boto3
@@ -384,14 +368,15 @@ Resources:
                   bucket = event['ResourceProperties']['BucketName']
                   table_name = event['ResourceProperties']['TableName']
                   
-                  # Create 1MB test file in S3
+                  # Create 10x 1MB test files in S3
                   test_data = b'0' * (1024 * 1024)  # 1MB
-                  s3.put_object(Bucket=bucket, Key='test-file.bin', Body=test_data)
+                  for i in range(10):
+                      s3.put_object(Bucket=bucket, Key=f'test-file-{i}.bin', Body=test_data)
                   
                   # Populate DynamoDB with test items
                   table = dynamodb.Table(table_name)
                   for i in range(100):
-                      table.put_item(Item={'id': f'test-{i}', 'data': f'test-data-{i}'})
+                      table.put_item(Item={'id': f'test-{i}', 'data': f'test-data-{i}', 'payload': 'X' * 1000})
                   
                   cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
               except Exception as e:

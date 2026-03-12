@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-03-12
+
+### Fixed
+- Fixed approval prompt showing exact "5 startup" minutes; now reads "up to ~5 startup" to reflect the variable startup time (issue #37).
+- Fixed TUI approval prompt similarly updated to "Up to 5 min startup delay" (issue #37).
+- Fixed CloudFormation UserData sed commands failing with "unterminated 's' command" due to embedded newlines in YAML block scalars; removed placeholder/sed approach in favour of required positional arguments (issue #36).
+- Fixed traffic generation producing 99.2% "Other" classification: replaced `FROM public.ecr.aws/lambda/python:3.12` Docker base image (caused ~500MB public ECR pull classified as Other) with `FROM scratch`; replaced nested per-file `aws s3 cp` loop (too slow for 5-min window) with `aws s3 sync` (issue #36).
+- Fixed CloudWatch log group not being deleted after scan: added 15-second drain wait between stopping Flow Logs and deleting the log group, preventing deferred-deletion race with in-flight CloudWatch writes.
+- Fixed `cleanup.sh` leaving orphaned `/aws/vpc/flowlogs/terminat*` CloudWatch log groups after each test run; script now deletes all such groups before stack deletion.
+
+### Changed
+- `continuous-traffic.sh` now validates that all CloudFormation stack outputs were retrieved before dispatching the SSM command.
+- Lambda data-population function timeout increased from 60s to 120s for safety margin with larger test dataset (10 files + 100 DynamoDB items with 1KB payloads).
+- DynamoDB traffic generation now scans the full table (100 items × 1KB payload) instead of `--max-items 10`.
+- ECR test layer size increased from 5MB to 20MB per push.
+- Sleep between traffic batches reduced from 10s to 2s for higher throughput.
+- S3 test dataset increased from 1 × 1MB file to 10 × 1MB files.
+- EC2 instance metadata options set to `HttpTokens: optional` to support both IMDSv1 and IMDSv2.
+- Traffic script uses IMDSv2 token-based metadata access to retrieve the region.
+
+### Internal
+- Fixed 17 lipgloss `\n`-inside-`Render()` violations across `ui/deep_scan.go` and `ui/quick_scan.go`.
+- Updated `test/TESTING.md` to reflect correct binary name (`terminat`), current script names, S3 file names, and valid CLI flags.
+
 ## [0.7.0] - 2026-02-14
 
 ### Added

@@ -94,6 +94,26 @@ else
 fi
 
 echo ""
+
+# Delete orphaned CloudWatch log groups created by termiNATor scans
+echo -e "${YELLOW}Cleaning up termiNATor CloudWatch log groups...${NC}"
+LOG_GROUPS=$(aws logs describe-log-groups \
+    --log-group-name-prefix "/aws/vpc/flowlogs/terminat" \
+    --region "$REGION" \
+    --query 'logGroups[*].logGroupName' \
+    --output text 2>/dev/null || echo "")
+
+if [ -n "$LOG_GROUPS" ]; then
+    COUNT=0
+    for lg in $LOG_GROUPS; do
+        aws logs delete-log-group --log-group-name "$lg" --region "$REGION" 2>/dev/null && COUNT=$((COUNT + 1)) || true
+    done
+    echo -e "${GREEN}Deleted $COUNT log group(s)${NC}"
+else
+    echo "No termiNATor log groups found"
+fi
+
+echo ""
 echo -e "${YELLOW}Deleting stack...${NC}"
 
 # Delete stack

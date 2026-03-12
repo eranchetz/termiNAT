@@ -249,7 +249,7 @@ aws ssm start-session --target <EC2_INSTANCE_ID>
 
 # Generate S3 traffic (download objects repeatedly)
 for i in {1..100}; do
-  aws s3 cp s3://terminator-test-bucket-<ACCOUNT_ID>/test-file-1mb.bin /tmp/test-$i.bin
+  aws s3 cp s3://terminator-test-bucket-<ACCOUNT_ID>/test-file-0.bin /tmp/test-$i.bin
   rm /tmp/test-$i.bin
 done
 
@@ -270,9 +270,7 @@ done
 
 ```bash
 # Run Quick Win Scan
-./terminator-cli scan quick \
-  --region us-east-1 \
-  --output test/results/quick-scan-baseline.json
+./terminat scan quick --region us-east-1
 
 # Expected findings:
 # - Missing S3 gateway endpoint in VPC vpc-xxx
@@ -282,15 +280,13 @@ done
 #### Test 2: Deep Dive (Baseline - No Endpoints)
 
 ```bash
-# Generate traffic for 5 minutes
-./test/scripts/generate-traffic.sh --instance-id <ID> --duration 5
+# Start continuous traffic generation
+./test/scripts/continuous-traffic.sh start
 
-# Run Deep Dive (15 min collection window)
-./terminator-cli scan deep \
+# Run Deep Dive (5 min collection window)
+./terminat scan deep \
   --region us-east-1 \
-  --nat-gateway-ids <NAT_GW_ID> \
-  --duration 15 \
-  --output test/results/deep-dive-baseline.json
+  --duration 5
 
 # Expected results:
 # - S3 traffic: > 0 GB (should match generated traffic volume)
@@ -308,14 +304,10 @@ aws ec2 create-vpc-endpoint \
   --route-table-ids <PRIVATE_RT_ID>
 
 # Generate traffic again
-./test/scripts/generate-traffic.sh --instance-id <ID> --duration 5
+./test/scripts/continuous-traffic.sh start
 
 # Run Deep Dive
-./terminator-cli scan deep \
-  --region us-east-1 \
-  --nat-gateway-ids <NAT_GW_ID> \
-  --duration 15 \
-  --output test/results/deep-dive-s3-endpoint.json
+./terminat scan deep --region us-east-1 --duration 5
 
 # Expected results:
 # - S3 traffic: 0 GB (traffic now goes via endpoint)
@@ -333,14 +325,10 @@ aws ec2 create-vpc-endpoint \
   --route-table-ids <PRIVATE_RT_ID>
 
 # Generate traffic again
-./test/scripts/generate-traffic.sh --instance-id <ID> --duration 5
+./test/scripts/continuous-traffic.sh start
 
 # Run Deep Dive
-./terminator-cli scan deep \
-  --region us-east-1 \
-  --nat-gateway-ids <NAT_GW_ID> \
-  --duration 15 \
-  --output test/results/deep-dive-both-endpoints.json
+./terminat scan deep --region us-east-1 --duration 5
 
 # Expected results:
 # - S3 traffic: 0 GB
@@ -416,18 +404,16 @@ aws ec2 describe-flow-logs \
 ```
 test/
 ├── infrastructure/
-│   ├── test-stack.yaml           # CloudFormation template
-│   └── test-stack-regional.yaml  # Regional NAT variant
+│   └── test-stack.yaml              # CloudFormation template
 ├── scripts/
-│   ├── generate-traffic.sh       # Traffic generation
-│   ├── validate-results.sh       # Result validation
-│   └── cleanup.sh                # Manual cleanup helper
-├── fixtures/
-│   ├── test-file-1mb.bin         # Sample S3 object
-│   └── dynamodb-seed-data.json   # Sample DynamoDB items
+│   ├── continuous-traffic.sh        # Traffic generation (start/stop/status)
+│   ├── run-e2e-test.sh              # Automated E2E test
+│   ├── deploy-test-infra.sh         # Deploy CloudFormation stack
+│   ├── cleanup.sh                   # Cleanup helper
+│   └── smoke-ui-stream.sh           # Smoke test (no AWS needed)
 ├── results/
-│   └── .gitkeep                  # Test results stored here
-└── run-all-tests.sh              # Main test orchestrator
+│   └── .gitkeep                     # Test results stored here
+└── TESTING.md                       # This guide
 ```
 
 ---

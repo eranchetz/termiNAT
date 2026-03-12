@@ -143,7 +143,7 @@ func (m quickScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m quickScanModel) View() string {
 	if m.err != nil {
-		return errorStyle.Render(fmt.Sprintf("Error: %v\n", m.err))
+		return errorStyle.Render(fmt.Sprintf("Error: %v", m.err)) + "\n"
 	}
 
 	var b strings.Builder
@@ -154,7 +154,7 @@ func (m quickScanModel) View() string {
 	if !m.done {
 		b.WriteString(fmt.Sprintf("%s %s\n", m.spinner.View(), stepStyle.Render(m.step)))
 	} else {
-		b.WriteString(successStyle.Render("✓ Scan Complete\n\n"))
+		b.WriteString(successStyle.Render("✓ Scan Complete") + "\n\n")
 		b.WriteString(m.renderResults())
 		b.WriteString("\n\n")
 		b.WriteString(infoStyle.Render("Press Enter to exit"))
@@ -166,7 +166,7 @@ func (m quickScanModel) View() string {
 func (m quickScanModel) renderResults() string {
 	var b strings.Builder
 
-	b.WriteString(stepStyle.Render(fmt.Sprintf("Found %d NAT Gateway(s)\n\n", len(m.nats))))
+	b.WriteString(stepStyle.Render(fmt.Sprintf("Found %d NAT Gateway(s)", len(m.nats))) + "\n\n")
 
 	for _, nat := range m.nats {
 		b.WriteString(fmt.Sprintf("  • %s (%s, %s)\n", nat.ID, nat.AvailabilityMode, nat.State))
@@ -174,10 +174,10 @@ func (m quickScanModel) renderResults() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(stepStyle.Render(fmt.Sprintf("Findings: %d\n\n", len(m.findings))))
+	b.WriteString(stepStyle.Render(fmt.Sprintf("Findings: %d", len(m.findings))) + "\n\n")
 
 	if len(m.findings) == 0 {
-		b.WriteString(successStyle.Render("  ✓ No issues found! All VPCs have proper endpoint configuration.\n"))
+		b.WriteString(successStyle.Render("  ✓ No issues found! All VPCs have proper endpoint configuration.") + "\n")
 	} else {
 		for _, finding := range m.findings {
 			severity := finding.Severity

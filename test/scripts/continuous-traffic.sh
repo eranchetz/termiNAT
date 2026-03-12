@@ -32,8 +32,16 @@ start_traffic() {
         --stack-name "$STACK_NAME" --region "$REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`TestRepositoryUri`].OutputValue' --output text)
     
+    # Validate that all outputs were retrieved
+    if [ -z "$INSTANCE_ID" ] || [ -z "$BUCKET" ] || [ -z "$TABLE" ] || [ -z "$REPO" ]; then
+        echo "Error: Failed to retrieve stack outputs. Ensure stack '$STACK_NAME' exists in region '$REGION'."
+        echo "  INSTANCE_ID=$INSTANCE_ID BUCKET=$BUCKET TABLE=$TABLE REPO=$REPO"
+        exit 1
+    fi
+
     # Run traffic generation for 30 minutes (longer than any scan)
-    COMMAND="/home/ec2-user/generate-traffic.sh 30 50 25 $BUCKET $TABLE $REPO"
+    # Args: duration=30min, s3_batches=5 (sync all 10 files per batch), ddb_requests=25
+    COMMAND="/home/ec2-user/generate-traffic.sh 30 5 25 $BUCKET $TABLE $REPO"
     
     COMMAND_ID=$(aws ssm send-command \
         --instance-ids "$INSTANCE_ID" \
