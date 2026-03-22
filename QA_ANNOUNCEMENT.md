@@ -37,6 +37,10 @@ export AWS_REGION=us-east-1
 
 # Quick scan (instant, read-only, no resources created)
 ./terminat scan quick --region us-east-1
+
+# Narrow to one VPC or a few NAT Gateways
+./terminat scan deep --region us-east-1 --vpc-id vpc-xxx --duration 5
+./terminat scan deep --region us-east-1 --nat-gateway-ids nat-a,nat-b --duration 5
 ```
 
 **That's it!** You'll see:
@@ -154,7 +158,7 @@ export AWS_REGION=us-east-1
 
 - **GitHub**: https://github.com/eranchetz/termiNAT
 - **Usage Guide**: https://github.com/eranchetz/termiNAT/blob/main/USAGE.md
-- **E2E Testing**: https://github.com/eranchetz/termiNAT/blob/main/E2E_TESTING.md
+- **E2E Testing**: https://github.com/eranchetz/termiNAT/blob/main/test/TESTING.md
 
 ## Feedback
 

@@ -1,21 +1,24 @@
 {{success "✓ Deep Dive Scan Complete"}}
 {{success "✓ Flow Logs STOPPED"}}
+{{- if .SelectedVPCIDs}}
+Selected VPCs: {{range $i, $vpc := .SelectedVPCIDs}}{{if $i}}, {{end}}{{$vpc}}{{end}}
+{{end}}
 
 {{header "NAT GATEWAY OVERVIEW"}}
-{{- range $vpcID, $nats := .VPCNATs}}
-{{- if eq $vpcID $.DeepScannedVPC}}
-{{highlight (printf "📊 VPC: %s [DEEP SCANNED - Traffic Analyzed]" $vpcID)}}
+{{- range .OrderedVPCNATs}}
+{{- if .Selected}}
+{{highlight (printf "📊 VPC: %s [SCANNED]" .VPCID)}}
 {{- else}}
-{{dim (printf "📋 VPC: %s [Config Check Only]" $vpcID)}}
+{{dim (printf "📋 VPC: %s [Config Check Only]" .VPCID)}}
 {{- end}}
-{{- range $nats}}
+{{- range .NATs}}
    • {{.ID}} ({{if .AvailabilityMode}}{{.AvailabilityMode}}{{else}}zonal{{end}})
 {{- end}}
 {{end}}
 
 {{- if .AllFindings}}
 {{header "VPC ENDPOINT ISSUES (All VPCs)"}}
-{{warn (printf "⚠️  Found %d issue(s) across all VPCs:" (len .AllFindings))}}
+{{warn (printf "⚠️  Found %d issue(s) across all scanned VPCs:" (len .AllFindings))}}
 {{range .AllFindings}}
   [{{upper .Severity}}] {{.Title}}
       {{.Description}}
@@ -23,13 +26,14 @@
 {{end}}
 {{- else}}
 {{header "VPC ENDPOINT STATUS (All VPCs)"}}
-{{success "✓ All VPCs have proper endpoint configuration!"}}
+{{success "✓ All scanned VPCs have proper endpoint configuration!"}}
 {{end}}
 
+{{- if .OrderedVPCNATs}}
+{{header "DETAILED ENDPOINT CONFIG"}}
+{{- range .OrderedVPCNATs}}
 {{- if .EndpointAnalysis}}
-{{header "DETAILED ENDPOINT CONFIG (Deep Scanned VPC)"}}
-VPC: {{.EndpointAnalysis.VPCID}}
-
+{{highlight (printf "VPC: %s" .VPCID)}}
 {{green "Gateway Endpoints:"}}
 {{- if .EndpointAnalysis.S3Endpoint}}
   ✓ S3: {{.EndpointAnalysis.S3Endpoint.ID}} ({{len .EndpointAnalysis.S3Endpoint.RouteTables}} route tables)
@@ -42,24 +46,28 @@ VPC: {{.EndpointAnalysis.VPCID}}
   {{warn "✗ DynamoDB: NOT CONFIGURED"}}
 {{- end}}
 
-{{- if .MissingRoutes}}
+{{- if .EndpointAnalysis.HasInterfaceEndpoints}}
+{{green "Interface Endpoints:"}}
+{{- range .EndpointAnalysis.GetInterfaceEndpointCosts}}
+  • {{.ServiceName}} ({{.Endpoint.ID}}): {{currency .MonthlyCost}}/month
+{{- end}}
+  Total Interface Endpoint Cost: {{currency .EndpointAnalysis.GetTotalInterfaceEndpointMonthlyCost}}/month
+  {{dim "💡 Interface endpoints cost $0.01/hour + $0.01/GB data processed"}}
+  {{dim "💡 Review unused endpoints to reduce costs"}}
+{{end}}
 
+{{- if .EndpointAnalysis.MissingRoutes}}
 {{warn "Route Tables Missing Endpoint Routes:"}}
-{{- range .MissingRoutes}}
+{{- range .EndpointAnalysis.MissingRoutes}}
   • {{.RouteTableID}}: missing {{.Service}} route
 {{- end}}
 {{end}}
 
-{{- if .HasInterfaceEndpoints}}
-{{green "Interface Endpoints:"}}
-{{- range .InterfaceEndpointCosts}}
-  • {{.ServiceName}} ({{.DisplayName}}): {{currency .MonthlyCost}}/month
+{{- else}}
+{{dim (printf "VPC: %s (no endpoint analysis available)" .VPCID)}}
 {{- end}}
-  Total Interface Endpoint Cost: {{currency .TotalInterfaceEndpointCost}}/month
-  {{dim "💡 Interface endpoints cost $0.01/hour + $0.01/GB data processed"}}
-  {{dim "💡 Review unused endpoints to reduce costs"}}
 {{end}}
-{{- end}}
+{{end}}
 
 {{- if .HasTraffic}}
 {{header "COLLECTED TRAFFIC SAMPLE"}}
@@ -91,7 +99,7 @@ Total Traffic: {{.TrafficStats.TotalRecords}} records, {{printf "%.2f" .TotalTra
 
 {{dim "Possible reasons:"}}
   • No applications were actively using the NAT Gateway during collection
-  • Flow Logs may not have started delivering data yet (can take 5-10 minutes)
+  • Flow Logs may not have started delivering data yet
   • All traffic was to private IPs (filtered out by analysis)
 
 {{dim "To diagnose:"}}
@@ -100,26 +108,6 @@ Total Traffic: {{.TrafficStats.TotalRecords}} records, {{printf "%.2f" .TotalTra
      {{dim (printf "     ./scripts/check-flowlogs-data.sh %s" .LogGroupName)}}
   3. Try running a longer scan (15-30 minutes) during peak usage hours
 {{- end}}
-
-{{- if .CostEstimate}}
-{{header "COST ESTIMATE"}}
-{{warn (printf "⚠️  Projected from %d-minute sample to monthly estimate" .Duration)}}
-
-NAT Gateway Data Processing: ${{printf "%.4f" .CostEstimate.NATGatewayPricePerGB}} per GB
-
-{{green "Projected Monthly Costs:"}}
-  NAT Gateway Data Processing Cost:     {{currency .CostEstimate.CurrentMonthlyCost}}/month
-  Potential S3 savings:         {{currency .CostEstimate.S3SavingsMonthly}}/month
-  Potential DynamoDB savings:   {{currency .CostEstimate.DynamoSavingsMonthly}}/month
-{{- if gt .ECRCost 0.0}}
-  ECR traffic cost (no free endpoint): {{currency .ECRCost}}/month
-{{- end}}
-  ─────────────────────────────────────────
-{{highlight (printf "  TOTAL POTENTIAL SAVINGS:      %s/month (%s/year)" (currency .CostEstimate.TotalSavingsMonthly) (currency .AnnualSavings))}}
-
-{{dim "Note: Actual costs depend on real traffic patterns. Run longer"}}
-{{dim "scans during peak hours for more accurate estimates."}}
-{{end}}
 
 {{- if .HasRemediation}}
 {{header "REMEDIATION STEPS"}}
@@ -172,3 +160,4 @@ NAT Gateway Data Processing: ${{printf "%.4f" .CostEstimate.NATGatewayPricePerGB
   • Cost estimates based on traffic sample collected
   • Actual costs may vary based on traffic patterns
   • Gateway VPC Endpoints for S3 and DynamoDB are FREE
+  • ECR Interface Endpoint pricing shown is an estimate from built-in regional defaults

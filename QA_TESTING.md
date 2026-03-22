@@ -29,6 +29,8 @@ If not exists, run:
 ### Test 1: Quick Scan
 **Purpose**: Verify basic NAT Gateway discovery and VPC endpoint detection
 
+Scans are region-scoped. Use `--vpc-id`, `--vpc-ids`, or `--nat-gateway-ids` when you want to narrow the scan to specific targets inside the selected region.
+
 ```bash
 ./terminat scan quick --region us-east-1
 ```

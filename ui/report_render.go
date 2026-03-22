@@ -7,8 +7,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/doitintl/terminator/internal/analysis"
-	"github.com/doitintl/terminator/pkg/types"
+	"github.com/doitintl/terminator/internal/report"
 )
 
 //go:embed templates/report.tmpl
@@ -40,127 +39,20 @@ var tmplFuncs = template.FuncMap{
 	},
 }
 
+type reportData = report.ViewData
+type epCostDisplay = report.ViewInterfaceEndpointCost
+type sourceIPDisplay = report.ViewSourceIP
+
 func sectionHeader(title string) string {
 	line := strings.Repeat("─", 60)
 	return stepStyle.Render(line) + "\n" + stepStyle.Render(title) + "\n" + stepStyle.Render(line) + "\n"
 }
 
-// reportData holds all data needed by the report template.
-type reportData struct {
-	VPCNATs          map[string][]types.NATGateway
-	DeepScannedVPC   string
-	AllFindings      []types.Finding
-	EndpointAnalysis *analysis.EndpointAnalysis
-	TrafficStats     *analysis.TrafficStats
-	CostEstimate     *analysis.CostEstimate
-	Recommendations  []analysis.Recommendation
-	Duration         int
-	LogGroupName     string
-
-	// Computed fields
-	HasTraffic                         bool
-	HasRemediation                     bool
-	HasInterfaceEndpoints              bool
-	MissingRoutes                      []analysis.MissingRoute
-	InterfaceEndpointCosts             []epCostDisplay
-	TotalInterfaceEndpointCost         float64
-	TotalTrafficGB                     float64
-	S3GB, DynamoGB, ECRGB, OtherGB     float64
-	S3Pct, DynamoPct, ECRPct, OtherPct float64
-	TopSourceIPs                       []sourceIPDisplay
-	MoreSources                        int
-	ECRCost                            float64
-	AnnualSavings                      float64
-	CreateEndpointCmds                 []string
-	AddRouteCmds                       []string
-}
-
-type epCostDisplay struct {
-	ServiceName string
-	DisplayName string
-	MonthlyCost float64
-}
-
-type sourceIPDisplay struct {
-	IP      string
-	GB      float64
-	Records int
-}
-
-func (m *deepScanModel) buildReportData() reportData {
-	d := reportData{
-		VPCNATs:          make(map[string][]types.NATGateway),
-		DeepScannedVPC:   m.deepScannedVPC,
-		AllFindings:      m.allFindings,
-		EndpointAnalysis: m.endpointAnalysis,
-		TrafficStats:     m.trafficStats,
-		CostEstimate:     m.costEstimate,
-		Recommendations:  m.recommendations,
-		Duration:         m.duration,
-		LogGroupName:     m.logGroupName,
+func (m *deepScanModel) currentReport() *report.Report {
+	if m.report != nil {
+		return m.report
 	}
-
-	for _, nat := range m.nats {
-		d.VPCNATs[nat.VPCID] = append(d.VPCNATs[nat.VPCID], nat)
-	}
-
-	if m.endpointAnalysis != nil {
-		d.MissingRoutes = m.endpointAnalysis.MissingRoutes
-		d.HasInterfaceEndpoints = m.endpointAnalysis.HasInterfaceEndpoints()
-		d.HasRemediation = m.endpointAnalysis.HasIssues()
-		if d.HasRemediation {
-			d.CreateEndpointCmds = m.endpointAnalysis.GetCreateEndpointCommands()
-			d.AddRouteCmds = m.endpointAnalysis.GetAddRouteCommands()
-		}
-		if d.HasInterfaceEndpoints {
-			d.TotalInterfaceEndpointCost = m.endpointAnalysis.GetTotalInterfaceEndpointMonthlyCost()
-			for _, c := range m.endpointAnalysis.GetInterfaceEndpointCosts() {
-				name := c.Endpoint.Tags["Name"]
-				if name == "" {
-					name = c.Endpoint.ID
-				}
-				d.InterfaceEndpointCosts = append(d.InterfaceEndpointCosts, epCostDisplay{
-					ServiceName: c.ServiceName,
-					DisplayName: name,
-					MonthlyCost: c.MonthlyCost,
-				})
-			}
-		}
-	}
-
-	if m.trafficStats != nil && m.trafficStats.TotalRecords > 0 {
-		d.HasTraffic = true
-		d.TotalTrafficGB = float64(m.trafficStats.TotalBytes) / (1024 * 1024 * 1024)
-		d.S3GB = float64(m.trafficStats.S3Bytes) / (1024 * 1024 * 1024)
-		d.DynamoGB = float64(m.trafficStats.DynamoBytes) / (1024 * 1024 * 1024)
-		d.ECRGB = float64(m.trafficStats.ECRBytes) / (1024 * 1024 * 1024)
-		d.OtherGB = float64(m.trafficStats.OtherBytes) / (1024 * 1024 * 1024)
-		d.S3Pct = m.trafficStats.S3Percentage()
-		d.DynamoPct = m.trafficStats.DynamoPercentage()
-		d.ECRPct = m.trafficStats.ECRPercentage()
-		d.OtherPct = m.trafficStats.OtherPercentage()
-
-		top := m.trafficStats.TopSourceIPs(10)
-		for _, e := range top {
-			d.TopSourceIPs = append(d.TopSourceIPs, sourceIPDisplay{
-				IP:      e.IP,
-				GB:      float64(e.Stats.Bytes) / (1024 * 1024 * 1024),
-				Records: e.Stats.Records,
-			})
-		}
-		if len(m.trafficStats.SourceIPs) > 10 {
-			d.MoreSources = len(m.trafficStats.SourceIPs) - 10
-		}
-	}
-
-	if m.costEstimate != nil {
-		d.AnnualSavings = m.costEstimate.TotalSavingsMonthly * 12
-		if m.trafficStats != nil && m.trafficStats.ECRBytes > 0 && m.costEstimate.OtherPercentage() > 0 {
-			d.ECRCost = m.costEstimate.OtherDataGB * m.costEstimate.NATGatewayPricePerGB * (m.trafficStats.ECRPercentage() / m.costEstimate.OtherPercentage())
-		}
-	}
-
-	return d
+	return report.NewDetailed(m.region, m.accountID, m.duration, m.nats, m.trafficStats, m.costEstimate, m.endpointAnalysis, m.endpointAnalyses, m.allFindings, m.recommendations, m.selectedVPCIDs, m.logGroupName)
 }
 
 func (m *deepScanModel) renderFinalReport() string {
@@ -168,7 +60,7 @@ func (m *deepScanModel) renderFinalReport() string {
 }
 
 func (m *deepScanModel) renderReportBody() string {
-	data := m.buildReportData()
+	data := m.currentReport().ViewData()
 	var buf bytes.Buffer
 	if err := reportTmpl.Execute(&buf, data); err != nil {
 		return fmt.Sprintf("Error rendering report: %v", err)

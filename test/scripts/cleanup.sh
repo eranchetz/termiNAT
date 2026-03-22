@@ -85,7 +85,27 @@ if [ -n "$REPO_URI" ]; then
             --repository-name "$REPO_NAME" \
             --region "$REGION" \
             --image-ids "$IMAGE_IDS" >/dev/null 2>&1 || true
-        echo -e "${GREEN}Repository emptied${NC}"
+        echo "Waiting for ECR repository to become empty..."
+
+        ECR_EMPTY=false
+        for _ in $(seq 1 12); do
+            REMAINING=$(aws ecr list-images \
+                --repository-name "$REPO_NAME" \
+                --region "$REGION" \
+                --query 'imageIds[*]' \
+                --output json 2>/dev/null || echo "[]")
+            if [ "$REMAINING" = "[]" ] || [ -z "$REMAINING" ]; then
+                ECR_EMPTY=true
+                break
+            fi
+            sleep 5
+        done
+
+        if [ "$ECR_EMPTY" = true ]; then
+            echo -e "${GREEN}Repository emptied${NC}"
+        else
+            echo -e "${YELLOW}Repository still reports images after waiting; continuing cleanup anyway${NC}"
+        fi
     else
         echo "Repository already empty"
     fi
@@ -132,14 +152,12 @@ aws cloudformation wait stack-delete-complete \
 echo -e "${GREEN}Stack deleted successfully!${NC}"
 echo ""
 
-# Clean up local test results (keep stack-name.txt to reuse bucket name)
+# Clean up local test results
 if [ -d "test/results" ]; then
     echo -e "${YELLOW}Cleaning up local test results...${NC}"
-    find test/results -type f ! -name 'stack-name.txt' -delete 2>/dev/null || true
-    echo -e "${GREEN}Local results cleaned (kept stack-name.txt for bucket reuse)${NC}"
+    find test/results -type f -delete 2>/dev/null || true
+    echo -e "${GREEN}Local results cleaned${NC}"
 fi
 
 echo ""
 echo -e "${GREEN}=== Cleanup Complete ===${NC}"
-echo -e "${YELLOW}Note: stack-name.txt preserved to avoid S3 bucket name collision on next deploy${NC}"
-echo -e "${YELLOW}To force a new stack name, delete test/results/stack-name.txt${NC}"

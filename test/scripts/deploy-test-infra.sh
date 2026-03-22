@@ -29,9 +29,11 @@ fi
 
 # Save stack name for other scripts
 echo "$STACK_NAME" > test/results/stack-name.txt
+ENVIRONMENT_NAME="${STACK_NAME}-${REGION}"
 
 echo -e "${GREEN}=== termiNATor Test Infrastructure Deployment ===${NC}"
 echo "Stack Name: $STACK_NAME"
+echo "Environment Name: $ENVIRONMENT_NAME"
 echo "Region: $REGION"
 echo ""
 
@@ -52,6 +54,7 @@ aws cloudformation "$OPERATION" \
     --template-body "file://$TEMPLATE_FILE" \
     --capabilities CAPABILITY_NAMED_IAM \
     --region "$REGION" \
+    --parameters ParameterKey=EnvironmentName,ParameterValue="$ENVIRONMENT_NAME" \
     --tags Key=Project,Value=termiNATor Key=Environment,Value=test
 
 echo -e "${YELLOW}Waiting for stack operation to complete...${NC}"

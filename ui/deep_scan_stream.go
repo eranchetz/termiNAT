@@ -25,8 +25,8 @@ type streamDeepScanRunner struct {
 	scanner            *core.Scanner
 	region             string
 	duration           int
+	vpcIDs             []string
 	natIDs             []string
-	vpcID              string
 	autoApprove        bool
 	autoCleanup        bool
 	exportFormat       string
@@ -49,11 +49,14 @@ type streamDeepScanRunner struct {
 	trafficStats         *analysis.TrafficStats
 	costEstimate         *analysis.CostEstimate
 	endpointAnalysis     *analysis.EndpointAnalysis
+	endpointAnalyses     map[string]*analysis.EndpointAnalysis
 	allFindings          []types.Finding
 	deepScannedVPC       string
+	selectedVPCIDs       []string
+	report               *report.Report
 }
 
-func RunDeepScanStream(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, vpcID string, autoApprove, autoCleanup bool, exportFormat, outputFile string, datahubAPIKey, datahubCustomerCtx string) error {
+func RunDeepScanStream(ctx context.Context, scanner *core.Scanner, region string, duration int, vpcIDs, natIDs []string, vpcID string, autoApprove, autoCleanup bool, exportFormat, outputFile string, datahubAPIKey, datahubCustomerCtx string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -62,8 +65,8 @@ func RunDeepScanStream(ctx context.Context, scanner *core.Scanner, region string
 		scanner:            scanner,
 		region:             region,
 		duration:           duration,
-		natIDs:             natIDs,
-		vpcID:              vpcID,
+		vpcIDs:             normalizeIDs(append([]string{vpcID}, vpcIDs...)),
+		natIDs:             normalizeIDs(natIDs),
 		autoApprove:        autoApprove,
 		autoCleanup:        autoCleanup,
 		exportFormat:       strings.ToLower(strings.TrimSpace(exportFormat)),
@@ -91,15 +94,26 @@ func (r *streamDeepScanRunner) run() error {
 		return err
 	}
 
-	if len(r.nats) > 1 && len(r.natIDs) == 0 && !r.autoApprove {
-		selected, err := r.promptNATSelection()
-		if err != nil {
-			return err
-		}
-		r.nats = selected
-	}
-
 	if !r.autoApprove {
+		if len(r.vpcIDs) == 0 && len(r.natIDs) == 0 && len(uniqueOrderedVPCIDs(r.nats)) > 1 {
+			selected, err := r.promptVPCSelection()
+			if err != nil {
+				return err
+			}
+			r.nats = filterNATsByVPCIDs(r.nats, selected)
+			if len(r.nats) == 0 {
+				return fmt.Errorf("no NAT gateways found in the selected VPC(s)")
+			}
+		}
+
+		if len(r.nats) > 1 && len(r.natIDs) == 0 {
+			selected, err := r.promptNATSelection()
+			if err != nil {
+				return err
+			}
+			r.nats = selected
+		}
+
 		approved, err := r.promptFlowLogsApproval()
 		if err != nil {
 			return err
@@ -123,46 +137,7 @@ func (r *streamDeepScanRunner) run() error {
 		}
 	}()
 
-	if err := r.waitForFlowLogsStartup(); err != nil {
-		return err
-	}
-
-	if err := r.collectTraffic(); err != nil {
-		return err
-	}
-
-	if err := r.analyzeTraffic(); err != nil {
-		return err
-	}
-
-	if err := r.stopFlowLogs(); err != nil {
-		return err
-	}
-
-	// Wait briefly for CloudWatch to drain in-flight writes before deleting the log group.
-	// Deleting immediately after stopping flow logs can cause the API to return success
-	// but defer the actual deletion until all buffered events are flushed.
-	select {
-	case <-time.After(15 * time.Second):
-	case <-r.ctx.Done():
-	}
-
-	if err := r.handleLogGroupCleanup(); err != nil {
-		return err
-	}
-
-	r.renderFinalSummary()
-
-	if err := r.exportIfRequested(); err != nil {
-		return err
-	}
-
-	if err := r.sendDataHubIfConfigured(); err != nil {
-		return err
-	}
-
-	r.logStage("scan", "Completed in %s", formatDuration(time.Since(r.startedAt)))
-	return nil
+	return r.finishScan()
 }
 
 func (r *streamDeepScanRunner) discoverNATs() error {
@@ -171,33 +146,9 @@ func (r *streamDeepScanRunner) discoverNATs() error {
 	if err != nil {
 		return err
 	}
-
-	if r.vpcID != "" {
-		filtered := make([]types.NATGateway, 0, len(nats))
-		for _, nat := range nats {
-			if nat.VPCID == r.vpcID {
-				filtered = append(filtered, nat)
-			}
-		}
-		nats = filtered
-	}
-
-	if len(r.natIDs) > 0 {
-		byID := make(map[string]types.NATGateway, len(nats))
-		for _, nat := range nats {
-			byID[nat.ID] = nat
-		}
-		filtered := make([]types.NATGateway, 0, len(r.natIDs))
-		for _, id := range r.natIDs {
-			if nat, ok := byID[id]; ok {
-				filtered = append(filtered, nat)
-			}
-		}
-		nats = filtered
-	}
-
-	if len(nats) == 0 {
-		return fmt.Errorf("no NAT gateways found")
+	nats, err = filterNATGateways(nats, r.vpcIDs, r.natIDs)
+	if err != nil {
+		return err
 	}
 
 	r.nats = nats
@@ -220,6 +171,48 @@ func (r *streamDeepScanRunner) discoverNATs() error {
 		r.logLine("  - %s (%s, vpc=%s)", nat.ID, mode, nat.VPCID)
 	}
 	return nil
+}
+
+func (r *streamDeepScanRunner) promptVPCSelection() ([]string, error) {
+	vpcs := uniqueOrderedVPCIDs(r.nats)
+	counts := countNATsByVPC(r.nats)
+
+	r.logLine("")
+	r.logLine("Multiple VPCs found. Select which to deep scan:")
+	for i, vpcID := range vpcs {
+		r.logLine("  %d) %s (%d NAT%s)", i+1, vpcID, counts[vpcID], pluralize(counts[vpcID]))
+	}
+
+	r.logLine("Enter comma-separated indexes or press Enter for all")
+	input, err := r.prompt("Selection [all]: ")
+	if err != nil {
+		return nil, err
+	}
+	input = strings.TrimSpace(strings.ToLower(input))
+	if input == "" || input == "all" {
+		return vpcs, nil
+	}
+
+	seen := map[int]struct{}{}
+	selected := make([]string, 0, len(vpcs))
+	for _, part := range strings.Split(input, ",") {
+		part = strings.TrimSpace(part)
+		idx, err := strconv.Atoi(part)
+		if err != nil || idx < 1 || idx > len(vpcs) {
+			return nil, fmt.Errorf("invalid VPC selection %q", part)
+		}
+		zeroBased := idx - 1
+		if _, exists := seen[zeroBased]; exists {
+			continue
+		}
+		seen[zeroBased] = struct{}{}
+		selected = append(selected, vpcs[zeroBased])
+	}
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("at least one VPC must be selected")
+	}
+	r.logStage("discover", "Selected %d VPC(s) for deep scan", len(selected))
+	return selected, nil
 }
 
 func (r *streamDeepScanRunner) promptNATSelection() ([]types.NATGateway, error) {
@@ -270,6 +263,49 @@ func (r *streamDeepScanRunner) promptNATSelection() ([]types.NATGateway, error) 
 	return selected, nil
 }
 
+func (r *streamDeepScanRunner) finishScan() error {
+	if err := r.waitForFlowLogsStartup(); err != nil {
+		return err
+	}
+
+	if err := r.collectTraffic(); err != nil {
+		return err
+	}
+
+	if err := r.analyzeTraffic(); err != nil {
+		return err
+	}
+
+	if err := r.stopFlowLogs(); err != nil {
+		return err
+	}
+
+	// Wait briefly for CloudWatch to drain in-flight writes before deleting the log group.
+	// Deleting immediately after stopping flow logs can cause the API to return success
+	// but defer the actual deletion until all buffered events are flushed.
+	select {
+	case <-time.After(15 * time.Second):
+	case <-r.ctx.Done():
+	}
+
+	if err := r.handleLogGroupCleanup(); err != nil {
+		return err
+	}
+
+	r.renderFinalSummary()
+
+	if err := r.exportIfRequested(); err != nil {
+		return err
+	}
+
+	if err := r.sendDataHubIfConfigured(); err != nil {
+		return err
+	}
+
+	r.logStage("scan", "Completed in %s", formatDuration(time.Since(r.startedAt)))
+	return nil
+}
+
 func (r *streamDeepScanRunner) promptFlowLogsApproval() (bool, error) {
 	r.logLine("")
 	r.logLine("Resource creation summary:")
@@ -280,7 +316,7 @@ func (r *streamDeepScanRunner) promptFlowLogsApproval() (bool, error) {
 	} else {
 		r.logLine("  - Estimated ingestion cost: ~$0.50 per GB")
 	}
-	r.logLine("  - Total scan time estimate: up to %d minutes (~5 startup + %d collection)", r.duration+5, r.duration)
+	r.logLine("  - Total scan time estimate: Flow Logs activation time + %d minute collection", r.duration)
 	return r.confirm("Proceed with scan?", true)
 }
 
@@ -378,11 +414,14 @@ func (r *streamDeepScanRunner) analyzeTraffic() error {
 	r.trafficStats = stats
 	r.costEstimate = r.scanner.CalculateCosts(stats, r.duration)
 
-	if len(r.nats) > 0 {
-		r.deepScannedVPC = r.nats[0].VPCID
-		r.endpointAnalysis, _ = r.scanner.AnalyzeVPCEndpoints(r.ctx, r.deepScannedVPC)
+	r.selectedVPCIDs = uniqueOrderedVPCIDs(r.nats)
+	if len(r.selectedVPCIDs) > 0 {
+		r.deepScannedVPC = r.selectedVPCIDs[0]
 	}
+	r.endpointAnalyses = analyzeEndpointAnalyses(r.ctx, r.scanner, r.nats)
+	r.endpointAnalysis = primaryEndpointAnalysis(r.endpointAnalyses, r.deepScannedVPC)
 	r.allFindings = analysis.AnalyzeAllVPCEndpoints(r.ctx, r.scanner, r.nats)
+	r.report = report.NewDetailed(r.region, r.scanner.GetAccountID(), r.duration, r.nats, r.trafficStats, r.costEstimate, r.endpointAnalysis, r.endpointAnalyses, r.allFindings, r.recommendations, r.selectedVPCIDs, r.logGroupName)
 
 	r.logStage("analyze", "Analysis complete: records=%d total=%.2fGB", stats.TotalRecords, float64(stats.TotalBytes)/(1024*1024*1024))
 	return nil
@@ -424,72 +463,7 @@ func (r *streamDeepScanRunner) handleLogGroupCleanup() error {
 
 func (r *streamDeepScanRunner) renderFinalSummary() {
 	r.logLine("")
-	r.logLine("========== DEEP SCAN REPORT ==========")
-
-	r.logLine("NAT Gateways")
-	for _, nat := range r.nats {
-		mode := nat.AvailabilityMode
-		if mode == "" {
-			mode = "zonal"
-		}
-		r.logLine("  - %s (%s, vpc=%s)", nat.ID, mode, nat.VPCID)
-	}
-
-	if len(r.allFindings) == 0 {
-		r.logLine("\nEndpoint Findings")
-		r.logLine("  - No endpoint issues found across scanned VPCs")
-	} else {
-		r.logLine("\nEndpoint Findings (%d)", len(r.allFindings))
-		for _, finding := range r.allFindings {
-			r.logLine("  - [%s] %s", strings.ToUpper(finding.Severity), finding.Title)
-			r.logLine("    %s", finding.Description)
-			r.logLine("    Action: %s", finding.Action)
-		}
-	}
-
-	if r.trafficStats != nil && r.trafficStats.TotalRecords > 0 {
-		totalGB := float64(r.trafficStats.TotalBytes) / (1024 * 1024 * 1024)
-		r.logLine("\nTraffic Sample")
-		r.logLine("  - Duration: %d minute(s)", r.duration)
-		r.logLine("  - Total: %d records, %.2f GB", r.trafficStats.TotalRecords, totalGB)
-		r.logLine("  - S3: %.2f GB (%.1f%%)", float64(r.trafficStats.S3Bytes)/(1024*1024*1024), r.trafficStats.S3Percentage())
-		r.logLine("  - DynamoDB: %.2f GB (%.1f%%)", float64(r.trafficStats.DynamoBytes)/(1024*1024*1024), r.trafficStats.DynamoPercentage())
-		r.logLine("  - ECR: %.2f GB (%.1f%%)", float64(r.trafficStats.ECRBytes)/(1024*1024*1024), r.trafficStats.ECRPercentage())
-		r.logLine("  - Other: %.2f GB (%.1f%%)", float64(r.trafficStats.OtherBytes)/(1024*1024*1024), r.trafficStats.OtherPercentage())
-	} else {
-		r.logLine("\nTraffic Sample")
-		r.logLine("  - No traffic records were collected in this run")
-	}
-
-	if r.costEstimate != nil {
-		r.logLine("\nCost Estimate (projected from sample)")
-		r.logLine("  - NAT data processing rate: $%.4f per GB", r.costEstimate.NATGatewayPricePerGB)
-		r.logLine("  - NAT Gateway Data Processing Cost: $%.2f/month", r.costEstimate.CurrentMonthlyCost)
-		r.logLine("  - S3 savings potential: $%.2f/month", r.costEstimate.S3SavingsMonthly)
-		r.logLine("  - DynamoDB savings potential: $%.2f/month", r.costEstimate.DynamoSavingsMonthly)
-		r.logLine("  - Total savings potential: $%.2f/month ($%.2f/year)", r.costEstimate.TotalSavingsMonthly, r.costEstimate.TotalSavingsMonthly*12)
-	}
-
-	if r.endpointAnalysis != nil && r.endpointAnalysis.HasIssues() {
-		r.logLine("\nRemediation Commands")
-		for _, cmd := range r.endpointAnalysis.GetCreateEndpointCommands() {
-			r.logLine("  %s", cmd)
-		}
-		for _, cmd := range r.endpointAnalysis.GetAddRouteCommands() {
-			r.logLine("  %s", cmd)
-		}
-	}
-
-	if len(r.recommendations) > 0 {
-		r.logLine("\nRecommendations")
-		for i, rec := range r.recommendations {
-			r.logLine("  %d. %s [%s]", i+1, rec.Title, strings.ToUpper(rec.Priority))
-			r.logLine("     %s", rec.Description)
-			if rec.Savings != "" {
-				r.logLine("     Savings: %s", rec.Savings)
-			}
-		}
-	}
+	fmt.Print(r.currentReport().SummaryText())
 }
 
 func (r *streamDeepScanRunner) exportIfRequested() error {
@@ -497,7 +471,7 @@ func (r *streamDeepScanRunner) exportIfRequested() error {
 		return nil
 	}
 
-	rep := report.New(r.region, r.scanner.GetAccountID(), r.duration, r.nats, r.trafficStats, r.costEstimate, r.endpointAnalysis)
+	rep := r.currentReport()
 	filename := r.outputFile
 	if filename == "" {
 		timestamp := time.Now().Format("20060102-150405")
@@ -529,13 +503,20 @@ func (r *streamDeepScanRunner) exportIfRequested() error {
 	return nil
 }
 
+func (r *streamDeepScanRunner) currentReport() *report.Report {
+	if r.report != nil {
+		return r.report
+	}
+	return report.NewDetailed(r.region, r.scanner.GetAccountID(), r.duration, r.nats, r.trafficStats, r.costEstimate, r.endpointAnalysis, r.endpointAnalyses, r.allFindings, r.recommendations, r.selectedVPCIDs, r.logGroupName)
+}
+
 func (r *streamDeepScanRunner) sendDataHubIfConfigured() error {
 	if r.datahubAPIKey == "" {
 		return nil
 	}
 
 	r.logStage("datahub", "Sending events to DoiT DataHub")
-	events := datahub.BuildEvents(r.scanner.GetAccountID(), r.region, r.nats, r.trafficStats, r.costEstimate, r.endpointAnalysis)
+	events := datahub.BuildEvents(r.scanner.GetAccountID(), r.region, r.nats, r.trafficStats, r.costEstimate, r.endpointAnalyses)
 	if err := datahub.Send(r.datahubAPIKey, r.datahubCustomerCtx, events); err != nil {
 		return err
 	}

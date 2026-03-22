@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide provides a complete, repeatable testing workflow for termiNATor using the `chetz-playground` AWS account. The test infrastructure is designed to be:
+This guide provides a complete, repeatable testing workflow for termiNATor using the `chetz-playground` AWS account. Scans are region-scoped: pick one region, then optionally narrow to one or more VPCs or NAT Gateways inside that region. The test infrastructure is designed to be:
 
 - **Easy to set up**: Single CloudFormation stack deployment
 - **Easy to run**: Simple scripts to generate test traffic

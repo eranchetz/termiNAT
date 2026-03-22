@@ -36,6 +36,7 @@ type phase int
 const (
 	phaseInit phase = iota
 	phaseDiscovering
+	phaseSelectingVPCs
 	phaseSelectingNATs
 	phaseAwaitingApproval
 	phaseCreatingResources
@@ -50,27 +51,30 @@ type deepScanModel struct {
 	scanner              *core.Scanner
 	ctx                  context.Context
 	duration             int
+	vpcIDs               []string
 	natIDs               []string
-	vpcID                string
 	autoApprove          bool
 	autoCleanup          bool
 	spinner              spinner.Model
 	phase                phase
 	step                 string
 	nats                 []types.NATGateway
+	selectedVPCIDs       []string
 	flowLogIDs           []string
 	logGroupName         string
 	runID                string
 	trafficStats         *analysis.TrafficStats
 	costEstimate         *analysis.CostEstimate
 	endpointAnalysis     *analysis.EndpointAnalysis
+	endpointAnalyses     map[string]*analysis.EndpointAnalysis
 	allFindings          []types.Finding // Quick scan findings for ALL VPCs
-	deepScannedVPC       string          // VPC that was deep scanned
+	deepScannedVPC       string          // Legacy primary VPC that was deep scanned
 	recommendations      []analysis.Recommendation
 	region               string
 	accountID            string
 	estimatedScanCostGB  float64
 	estimatedScanCostUSD float64
+	report               *report.Report
 	err                  error
 	done                 bool
 	startTime            time.Time
@@ -87,6 +91,8 @@ type deepScanModel struct {
 	datahubPhase         int // 0=none, 1=prompting-key, 2=prompting-context, 3=prompting-save, 4=sending
 	viewport             viewport.Model
 	viewportReady        bool
+	vpcCursor            int
+	vpcSelected          map[int]bool
 	natCursor            int
 	natSelected          map[int]bool
 }
@@ -113,17 +119,21 @@ type deepScanCompleteMsg struct{}
 type datahubResultMsg struct{ err error }
 
 func RunDeepScan(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, vpcID, uiMode string, autoApprove, autoCleanup bool, exportFormat, outputFile string, datahubAPIKey, datahubCustomerCtx string) error {
+	return RunDeepScanWithTargets(ctx, scanner, region, duration, nil, natIDs, vpcID, uiMode, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerCtx)
+}
+
+func RunDeepScanWithTargets(ctx context.Context, scanner *core.Scanner, region string, duration int, vpcIDs, natIDs []string, vpcID, uiMode string, autoApprove, autoCleanup bool, exportFormat, outputFile string, datahubAPIKey, datahubCustomerCtx string) error {
 	switch strings.ToLower(strings.TrimSpace(uiMode)) {
 	case "", "stream":
-		return RunDeepScanStream(ctx, scanner, region, duration, natIDs, vpcID, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerCtx)
+		return RunDeepScanStream(ctx, scanner, region, duration, vpcIDs, natIDs, vpcID, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerCtx)
 	case "tui":
-		return runDeepScanTUI(ctx, scanner, region, duration, natIDs, vpcID, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerCtx)
+		return runDeepScanTUI(ctx, scanner, region, duration, vpcIDs, natIDs, vpcID, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerCtx)
 	default:
 		return fmt.Errorf("invalid --ui value %q (valid: stream, tui)", uiMode)
 	}
 }
 
-func runDeepScanTUI(ctx context.Context, scanner *core.Scanner, region string, duration int, natIDs []string, vpcID string, autoApprove, autoCleanup bool, exportFormat, outputFile string, datahubAPIKey, datahubCustomerCtx string) error {
+func runDeepScanTUI(ctx context.Context, scanner *core.Scanner, region string, duration int, vpcIDs, natIDs []string, vpcID string, autoApprove, autoCleanup bool, exportFormat, outputFile string, datahubAPIKey, datahubCustomerCtx string) error {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4"))
@@ -132,8 +142,8 @@ func runDeepScanTUI(ctx context.Context, scanner *core.Scanner, region string, d
 		scanner:            scanner,
 		ctx:                ctx,
 		duration:           duration,
-		natIDs:             natIDs,
-		vpcID:              vpcID,
+		vpcIDs:             normalizeIDs(append([]string{vpcID}, vpcIDs...)),
+		natIDs:             normalizeIDs(natIDs),
 		autoApprove:        autoApprove,
 		autoCleanup:        autoCleanup,
 		spinner:            s,
@@ -181,7 +191,7 @@ func (m *deepScanModel) cleanupFlowLogs() {
 }
 
 func (m *deepScanModel) exportReport(format string) {
-	r := report.New(m.region, m.accountID, m.duration, m.nats, m.trafficStats, m.costEstimate, m.endpointAnalysis)
+	r := m.currentReport()
 
 	var filename string
 	var err error
@@ -219,7 +229,7 @@ func (m *deepScanModel) exportReport(format string) {
 }
 
 func (m *deepScanModel) sendToDataHub() tea.Msg {
-	events := datahub.BuildEvents(m.accountID, m.region, m.nats, m.trafficStats, m.costEstimate, m.endpointAnalysis)
+	events := datahub.BuildEvents(m.accountID, m.region, m.nats, m.trafficStats, m.costEstimate, m.endpointAnalyses)
 	err := datahub.Send(m.datahubAPIKey, m.datahubCustomerCtx, events)
 	return datahubResultMsg{err: err}
 }
@@ -250,6 +260,60 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			m.cleanupFlowLogs()
 			return m, tea.Quit
+		}
+
+		// VPC selection phase key handlers
+		if m.phase == phaseSelectingVPCs {
+			switch msg.String() {
+			case "up", "k":
+				if m.vpcCursor > 0 {
+					m.vpcCursor--
+				}
+			case "down", "j":
+				if m.vpcCursor < len(m.vpcList())-1 {
+					m.vpcCursor++
+				}
+			case " ":
+				m.vpcSelected[m.vpcCursor] = !m.vpcSelected[m.vpcCursor]
+			case "a":
+				allSelected := true
+				for i := range m.vpcList() {
+					if !m.vpcSelected[i] {
+						allSelected = false
+						break
+					}
+				}
+				for i := range m.vpcList() {
+					m.vpcSelected[i] = !allSelected
+				}
+			case "enter":
+				selected := []string{}
+				for i, vpcID := range m.vpcList() {
+					if m.vpcSelected[i] {
+						selected = append(selected, vpcID)
+					}
+				}
+				if len(selected) == 0 {
+					return m, nil
+				}
+				m.selectedVPCIDs = selected
+				m.nats = filterNATsByVPCIDs(m.nats, selected)
+				if len(m.nats) == 0 {
+					m.err = fmt.Errorf("no NAT gateways found in the selected VPC(s)")
+					m.done = true
+					return m, tea.Quit
+				}
+				if len(m.nats) > 1 && len(m.natIDs) == 0 {
+					m.natSelected = make(map[int]bool)
+					for i := range m.nats {
+						m.natSelected[i] = true
+					}
+					m.phase = phaseSelectingNATs
+					return m, nil
+				}
+				m.phase = phaseAwaitingApproval
+			}
+			return m, nil
 		}
 
 		// NAT selection phase key handlers
@@ -428,7 +492,14 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.phase = phaseCreatingResources
 			return m, m.createFlowLogs
 		}
-		// Show interactive selection when multiple NATs and no explicit filter
+		if len(m.vpcIDs) == 0 && len(m.natIDs) == 0 && len(uniqueOrderedVPCIDs(m.nats)) > 1 {
+			m.vpcSelected = make(map[int]bool)
+			for i := range m.vpcList() {
+				m.vpcSelected[i] = true
+			}
+			m.phase = phaseSelectingVPCs
+			return m, nil
+		}
 		if len(m.nats) > 1 && len(m.natIDs) == 0 {
 			m.natSelected = make(map[int]bool)
 			for i := range m.nats {
@@ -456,6 +527,7 @@ func (m *deepScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.endpointAnalysis = msg.endpointAnalysis
 		m.allFindings = msg.allFindings
 		m.deepScannedVPC = msg.deepScannedVPC
+		m.report = report.NewDetailed(m.region, m.accountID, m.duration, m.nats, m.trafficStats, m.costEstimate, m.endpointAnalysis, m.endpointAnalyses, m.allFindings, m.recommendations, m.selectedVPCIDs, m.logGroupName)
 		return m, m.stopFlowLogs
 
 	case flowLogsStoppedMsg:
@@ -519,6 +591,8 @@ func (m *deepScanModel) View() string {
 	switch m.phase {
 	case phaseInit, phaseDiscovering:
 		b.WriteString(fmt.Sprintf("%s %s\n", m.spinner.View(), "Discovering NAT Gateways..."))
+	case phaseSelectingVPCs:
+		b.WriteString(m.renderVPCSelection())
 	case phaseSelectingNATs:
 		b.WriteString(m.renderNATSelection())
 	case phaseAwaitingApproval:
@@ -541,6 +615,53 @@ func (m *deepScanModel) View() string {
 		}
 	}
 
+	return b.String()
+}
+
+func (m *deepScanModel) vpcList() []string {
+	if len(m.nats) == 0 {
+		return nil
+	}
+	return uniqueOrderedVPCIDs(m.nats)
+}
+
+func filterNATsByVPCIDs(nats []types.NATGateway, selectedVPCIDs []string) []types.NATGateway {
+	if len(selectedVPCIDs) == 0 {
+		return append([]types.NATGateway(nil), nats...)
+	}
+	set := make(map[string]struct{}, len(selectedVPCIDs))
+	for _, vpcID := range selectedVPCIDs {
+		set[vpcID] = struct{}{}
+	}
+	filtered := make([]types.NATGateway, 0, len(nats))
+	for _, nat := range nats {
+		if _, ok := set[nat.VPCID]; ok {
+			filtered = append(filtered, nat)
+		}
+	}
+	return filtered
+}
+
+func (m *deepScanModel) renderVPCSelection() string {
+	var b strings.Builder
+	b.WriteString(stepStyle.Render("Select VPCs to deep scan:") + "\n\n")
+
+	vpcs := m.vpcList()
+	counts := countNATsByVPC(m.nats)
+	for i, vpcID := range vpcs {
+		cursor := "  "
+		if i == m.vpcCursor {
+			cursor = highlightStyle.Render("> ")
+		}
+		check := "[ ]"
+		if m.vpcSelected[i] {
+			check = successStyle.Render("[✓]")
+		}
+		b.WriteString(fmt.Sprintf("%s%s %s (%d NAT%s)\n", cursor, check, vpcID, counts[vpcID], pluralize(counts[vpcID])))
+	}
+
+	b.WriteString("\n")
+	b.WriteString(tipStyle.Render("↑/↓ move  ␣ toggle  a select all  enter confirm") + "\n")
 	return b.String()
 }
 
@@ -605,8 +726,8 @@ func (m *deepScanModel) renderApprovalPrompt() string {
 		b.WriteString("   • For a 5-minute scan, typical cost: < $0.10\n")
 	}
 
-	b.WriteString("\n" + stepStyle.Render(fmt.Sprintf("⏱️  Total scan time: up to %d minutes", m.duration+5)) + "\n")
-	b.WriteString("   • Up to 5 min startup delay (Flow Logs initialization)\n")
+	b.WriteString("\n" + stepStyle.Render(fmt.Sprintf("⏱️  Total scan time: Flow Logs activation time + %d minutes", m.duration)) + "\n")
+	b.WriteString("   • Flow Logs activation time varies by account/region\n")
 	b.WriteString(fmt.Sprintf("   • %d min traffic collection\n\n", m.duration))
 
 	b.WriteString(highlightStyle.Render("Proceed with scan? [Y/n] "))
@@ -682,29 +803,9 @@ func (m *deepScanModel) discoverNATs() tea.Msg {
 		return deepScanErrorMsg{err: err}
 	}
 
-	// Filter by --vpc-id
-	if m.vpcID != "" {
-		filtered := []types.NATGateway{}
-		for _, nat := range nats {
-			if nat.VPCID == m.vpcID {
-				filtered = append(filtered, nat)
-			}
-		}
-		nats = filtered
-	}
-
-	// Filter by --nat-gateway-ids
-	if len(m.natIDs) > 0 {
-		filtered := []types.NATGateway{}
-		for _, nat := range nats {
-			for _, id := range m.natIDs {
-				if nat.ID == id {
-					filtered = append(filtered, nat)
-					break
-				}
-			}
-		}
-		nats = filtered
+	nats, err = filterNATGateways(nats, m.vpcIDs, m.natIDs)
+	if err != nil {
+		return deepScanErrorMsg{err: err}
 	}
 
 	if len(nats) == 0 {
@@ -791,23 +892,23 @@ func (m *deepScanModel) analyzeTraffic() tea.Msg {
 
 	costEstimate := m.scanner.CalculateCosts(stats, m.duration)
 
-	// Analyze VPC endpoints for the deep scanned VPC
-	var endpointAnalysis *analysis.EndpointAnalysis
-	var deepScannedVPC string
-	if len(m.nats) > 0 {
-		deepScannedVPC = m.nats[0].VPCID
-		endpointAnalysis, _ = m.scanner.AnalyzeVPCEndpoints(m.ctx, deepScannedVPC)
+	m.selectedVPCIDs = uniqueOrderedVPCIDs(m.nats)
+	if len(m.selectedVPCIDs) > 0 {
+		m.deepScannedVPC = m.selectedVPCIDs[0]
 	}
+	m.endpointAnalyses = analyzeEndpointAnalyses(m.ctx, m.scanner, m.nats)
+	m.endpointAnalysis = primaryEndpointAnalysis(m.endpointAnalyses, m.deepScannedVPC)
 
 	// Run quick scan analysis on ALL VPCs (not just the deep scanned one)
 	allFindings := analysis.AnalyzeAllVPCEndpoints(m.ctx, m.scanner, m.nats)
 
+	m.allFindings = allFindings
 	return trafficAnalyzedMsg{
 		stats:            stats,
 		cost:             costEstimate,
-		endpointAnalysis: endpointAnalysis,
+		endpointAnalysis: m.endpointAnalysis,
 		allFindings:      allFindings,
-		deepScannedVPC:   deepScannedVPC,
+		deepScannedVPC:   m.deepScannedVPC,
 	}
 }
 
@@ -825,6 +926,40 @@ func (m *deepScanModel) deleteLogGroup() tea.Msg {
 		return deepScanErrorMsg{err: fmt.Errorf("failed to delete log group: %w", err)}
 	}
 	return deepScanCompleteMsg{}
+}
+
+func analyzeEndpointAnalyses(ctx context.Context, scanner *core.Scanner, nats []types.NATGateway) map[string]*analysis.EndpointAnalysis {
+	analyses := make(map[string]*analysis.EndpointAnalysis)
+	for _, vpcID := range uniqueOrderedVPCIDs(nats) {
+		analysis, err := scanner.AnalyzeVPCEndpoints(ctx, vpcID)
+		if err != nil {
+			continue
+		}
+		analyses[vpcID] = analysis
+	}
+	return analyses
+}
+
+func primaryEndpointAnalysis(analyses map[string]*analysis.EndpointAnalysis, primaryVPCID string) *analysis.EndpointAnalysis {
+	if len(analyses) == 0 {
+		return nil
+	}
+	if primaryVPCID != "" {
+		if analysis, ok := analyses[primaryVPCID]; ok {
+			return analysis
+		}
+	}
+	for _, analysis := range analyses {
+		return analysis
+	}
+	return nil
+}
+
+func pluralize(count int) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func formatDuration(d time.Duration) string {

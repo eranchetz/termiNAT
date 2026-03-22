@@ -2,18 +2,20 @@
 
 Complete guide for running termiNATor in your AWS environment to identify NAT Gateway cost optimization opportunities.
 
+Each run scans one AWS region. If you do not pass VPC or NAT filters, termiNATor scans every NAT Gateway in that region.
+
 ## Prerequisites
 
 ### 1. Install termiNATor
 
 ```bash
 # Option 1: Install from source
-git clone https://github.com/doitintl/terminator.git
+git clone https://github.com/eranchetz/termiNAT.git
 cd terminator
 go build -o terminat
 
 # Option 2: Download binary (when available)
-# curl -L https://github.com/doitintl/terminator/releases/latest/download/terminat-$(uname -s)-$(uname -m) -o terminat
+# curl -L https://github.com/eranchetz/termiNAT/releases/latest/download/terminat-$(uname -s)-$(uname -m) -o terminat
 # chmod +x terminat
 ```
 
@@ -89,6 +91,19 @@ Analyze real traffic patterns to calculate actual savings:
 ./terminat scan deep --region us-east-1 --duration 5
 ```
 
+Targeting examples:
+
+```bash
+# One VPC
+./terminat scan deep --region us-east-1 --vpc-id vpc-123 --duration 5
+
+# Many VPCs
+./terminat scan deep --region us-east-1 --vpc-ids vpc-a,vpc-b --duration 5
+
+# Specific NAT Gateways
+./terminat scan deep --region us-east-1 --nat-gateway-ids nat-a,nat-b --duration 5
+```
+
 By default, `scan quick` and `scan deep` use serial stream output (`--ui stream`) so logs stay append-only.
 Use `--ui tui` for the interactive full-screen Bubble Tea interface.
 `scan quick` and `scan deep` also run doctor preflight checks by default; use `--doctor=false` to skip only that step.
@@ -102,9 +117,9 @@ Use `--ui tui` for the interactive full-screen Bubble Tea interface.
 - ✅ Asks if you want to keep CloudWatch logs
 
 **Timeline:**
-- 5 min: Flow Logs initialization (AWS requirement)
+- Flow Logs activation time (AWS requirement, varies by account/region)
 - 5 min: Traffic collection (configurable: 5-60 minutes)
-- **Total: 10 minutes**
+- **Total: Flow Logs activation time + collection duration**
 
 **Approval prompt:**
 ```
@@ -125,8 +140,8 @@ The following AWS resources will be created:
    • CloudWatch Logs storage: ~$0.03 per GB/month
    • For a 5-minute scan, typical cost: < $0.10
 
-⏱️  Total scan time: 10 minutes
-   • 5 min startup delay (Flow Logs initialization)
+⏱️  Total scan time: Flow Logs activation time + collection duration
+   • Flow Logs activation time (varies by account/region)
    • 5 min traffic collection
 
 Proceed with scan? [Y/n]
@@ -230,10 +245,11 @@ aws ec2 create-vpc-endpoint \
 
 ## Advanced Usage
 
-### Scan Specific NAT Gateway
+### Target a Specific NAT or VPC
 
 ```bash
-./terminat scan deep --region us-east-1 --nat-id nat-1234567890abcdef0 --duration 5
+./terminat scan deep --region us-east-1 --vpc-id vpc-123 --duration 5
+./terminat scan deep --region us-east-1 --nat-gateway-ids nat-1234567890abcdef0 --duration 5
 ```
 
 ### Longer Collection Period (More Accurate)
@@ -250,7 +266,7 @@ aws ec2 create-vpc-endpoint \
 ./terminat scan deep --region us-east-1 --duration 15 --ui tui
 ```
 
-### Multiple Regions
+### Different Regions
 
 ```bash
 # Scan each region separately
@@ -345,7 +361,7 @@ aws iam get-role --role-name termiNATor-FlowLogsRole
 ### "No traffic data collected"
 
 **Causes:**
-- Flow Logs need 5-10 minutes to start delivering data (handled automatically)
+- Flow Logs may take several minutes to start delivering data (handled automatically)
 - No applications using NAT Gateway during collection
 
 **Solution:**
@@ -403,8 +419,8 @@ After running termiNATor:
 
 ## Support
 
-- **Issues**: https://github.com/doitintl/terminator/issues
-- **Documentation**: https://github.com/doitintl/terminator/wiki
+- **Issues**: https://github.com/eranchetz/termiNAT/issues
+- **Documentation**: https://github.com/eranchetz/termiNAT/wiki
 - **Questions**: Open a GitHub discussion
 
 ## Cost Transparency
@@ -417,10 +433,10 @@ After running termiNATor:
 - **Flow Logs ingestion**: ~$0.50 per GB ingested
 - **CloudWatch Logs storage**: ~$0.03 per GB/month (if kept)
 - **Typical cost**: < $0.10 for a 5-minute scan
-- **Time**: 10 minutes (5 min startup + 5 min collection)
+- **Time**: Flow Logs activation time + 5 min collection
 
 ### Deep Dive Scan (30-minute collection)
 - **Typical cost**: < $0.50
-- **Time**: 35 minutes (5 min startup + 30 min collection)
+- **Time**: Flow Logs activation time + 30 min collection
 
 **Note**: Actual costs depend on traffic volume through NAT Gateway.

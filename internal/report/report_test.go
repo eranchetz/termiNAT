@@ -96,10 +96,91 @@ func TestMarkdownIncludesNATModeAndECREndpointRemediation(t *testing.T) {
 	if !strings.Contains(md, "## NAT Gateway Topology") || !strings.Contains(md, "| nat-1 | zonal |") {
 		t.Error("markdown report missing NAT topology with gateway mode")
 	}
-	if !strings.Contains(md, "### ECR Interface Endpoints (Paid)") || !strings.Contains(md, "ecr.api") {
+	if !strings.Contains(md, "ECR Interface Endpoints (not free)") || !strings.Contains(md, "ECR API: NOT CONFIGURED") {
 		t.Error("markdown report missing ECR interface endpoint status")
 	}
 	if !strings.Contains(md, "--vpc-endpoint-type Interface") || !strings.Contains(md, "<security-group-id>") {
 		t.Error("markdown report missing ECR remediation command with security group placeholder")
+	}
+}
+
+func TestViewDataAndSummaryTextIncludeCanonicalScanData(t *testing.T) {
+	stats := &analysis.TrafficStats{
+		S3Bytes:      1073741824,
+		DynamoBytes:  536870912,
+		ECRBytes:     107374182,
+		OtherBytes:   214748365,
+		TotalBytes:   1932734783,
+		TotalRecords: 100,
+	}
+	cost := &analysis.CostEstimate{
+		Region:               "us-east-1",
+		TotalDataGB:          1.8,
+		S3DataGB:             1.0,
+		DynamoDataGB:         0.5,
+		OtherDataGB:          0.3,
+		CurrentMonthlyCost:   0.081,
+		S3SavingsMonthly:     0.045,
+		DynamoSavingsMonthly: 0.0225,
+		TotalSavingsMonthly:  0.0675,
+		NATGatewayPricePerGB: 0.045,
+	}
+	endpoints := analysis.AnalyzeEndpoints(
+		"us-east-1",
+		"vpc-123",
+		nil,
+		[]types.RouteTable{
+			{
+				ID:      "rtb-1",
+				VPCID:   "vpc-123",
+				Subnets: []string{"subnet-a", "subnet-b"},
+				Routes: []types.Route{
+					{DestinationCIDR: "0.0.0.0/0", TargetType: "nat-gateway"},
+				},
+			},
+		},
+	)
+
+	r := NewDetailed(
+		"us-east-1",
+		"123456789012",
+		5,
+		[]types.NATGateway{{ID: "nat-1", VPCID: "vpc-123", SubnetID: "subnet-a", AvailabilityMode: "zonal"}},
+		stats,
+		cost,
+		endpoints,
+		map[string]*analysis.EndpointAnalysis{"vpc-123": endpoints},
+		[]types.Finding{{Severity: "high", Title: "Missing DynamoDB endpoint", Description: "Traffic is still traversing NAT", Action: "Create a DynamoDB Gateway endpoint"}},
+		[]analysis.Recommendation{{Priority: "high", Title: "Consolidate NAT usage", Description: "Reduce duplicate NAT cost", Savings: "$12/month"}},
+		[]string{"vpc-123"},
+		"/aws/vpc/flowlogs/terminat-123",
+	)
+
+	data := r.ViewData()
+	if !data.HasTraffic {
+		t.Fatal("expected view data to report traffic")
+	}
+	if !data.HasRemediation {
+		t.Fatal("expected remediation data to be populated")
+	}
+	if len(data.CreateEndpointCmds) == 0 {
+		t.Fatal("expected remediation commands to be populated")
+	}
+	if data.ECRCost <= 0 {
+		t.Fatal("expected ECR cost to be projected from the canonical view")
+	}
+
+	summary := r.SummaryText()
+	for _, want := range []string{
+		"Selected VPCs: vpc-123",
+		"Log group: /aws/vpc/flowlogs/terminat-123",
+		"Missing DynamoDB endpoint",
+		"Consolidate NAT usage",
+		"Traffic Sample",
+		"Cost Estimate (projected from sample)",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q\n%s", want, summary)
+		}
 	}
 }

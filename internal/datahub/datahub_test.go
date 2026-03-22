@@ -11,7 +11,7 @@ import (
 	"github.com/doitintl/terminator/pkg/types"
 )
 
-func testData() ([]types.NATGateway, *analysis.TrafficStats, *analysis.CostEstimate, *analysis.EndpointAnalysis) {
+func testData() ([]types.NATGateway, *analysis.TrafficStats, *analysis.CostEstimate, map[string]*analysis.EndpointAnalysis) {
 	nats := []types.NATGateway{{ID: "nat-123", VPCID: "vpc-abc"}}
 	stats := &analysis.TrafficStats{
 		S3Bytes:     1073741824, // 1 GB
@@ -35,7 +35,7 @@ func testData() ([]types.NATGateway, *analysis.TrafficStats, *analysis.CostEstim
 		S3Endpoint:     &types.VPCEndpoint{ID: "vpce-s3"},
 		DynamoEndpoint: nil, // missing
 	}
-	return nats, stats, cost, endpoints
+	return nats, stats, cost, map[string]*analysis.EndpointAnalysis{"vpc-abc": endpoints}
 }
 
 func TestBuildEventsNil(t *testing.T) {

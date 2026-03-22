@@ -1,10 +1,11 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-VERSION="${1:?Usage: $0 <version> (e.g. v0.6.0)}"
+VERSION="${1:?Usage: $0 <version> (e.g. v0.8.0)}"
 REPO="eranchetz/termiNAT"
 DIST="dist/${VERSION}"
 LDFLAGS="-s -w -X main.Version=${VERSION}"
+NOTES_FILE="RELEASE_NOTES_${VERSION}.md"
 
 echo "🚀 Building termiNATor ${VERSION}"
 echo "================================"
@@ -49,9 +50,17 @@ if gh release view "${VERSION}" --repo "${REPO}" &>/dev/null; then
   echo "📤 Uploading to existing release ${VERSION}..."
 else
   echo "📝 Creating release ${VERSION}..."
-  gh release create "${VERSION}" --repo "${REPO}" \
-    --title "termiNATor ${VERSION}" \
-    --generate-notes
+  if [ -f "${NOTES_FILE}" ]; then
+    echo "🗒️  Using release notes from ${NOTES_FILE}"
+    gh release create "${VERSION}" --repo "${REPO}" \
+      --title "termiNATor ${VERSION}" \
+      --notes-file "${NOTES_FILE}"
+  else
+    echo "🗒️  No curated release notes found; falling back to generated notes"
+    gh release create "${VERSION}" --repo "${REPO}" \
+      --title "termiNATor ${VERSION}" \
+      --generate-notes
+  fi
 fi
 
 gh release upload "${VERSION}" --repo "${REPO}" --clobber "${DIST}"/terminat-*

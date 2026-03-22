@@ -34,6 +34,12 @@ DURATION=10 S3_REQUESTS=200 DDB_REQUESTS=100 ./test/scripts/generate-traffic.sh
 ### 3. Run termiNATor Scan
 
 ```bash
+# Get VPC ID from outputs
+VPC_ID=$(aws cloudformation describe-stacks \
+  --stack-name terminator-test-infra \
+  --query 'Stacks[0].Outputs[?OutputKey==`VPCId`].OutputValue' \
+  --output text)
+
 # Get NAT Gateway ID from outputs
 NAT_ID=$(aws cloudformation describe-stacks \
   --stack-name terminator-test-infra \
@@ -41,8 +47,9 @@ NAT_ID=$(aws cloudformation describe-stacks \
   --output text)
 
 # Run scan (when termiNATor CLI is ready)
-./terminator-cli scan deep \
+./terminat scan deep \
   --region us-east-1 \
+  --vpc-id $VPC_ID \
   --nat-gateway-ids $NAT_ID \
   --duration 15
 ```

@@ -16,8 +16,9 @@ var (
 	region                 string
 	profile                string
 	duration               int
-	natIDs                 []string
 	vpcID                  string
+	vpcIDs                 []string
+	natIDs                 []string
 	quickDoctor            bool
 	deepDoctor             bool
 	deepUIMode             string
@@ -80,11 +81,12 @@ func init() {
 	// Common flags
 	scanCmd.PersistentFlags().StringVarP(&region, "region", "r", "", "AWS region (uses AWS_REGION env var if not specified)")
 	scanCmd.PersistentFlags().StringVarP(&profile, "profile", "p", "", "AWS profile (uses AWS_PROFILE env var if not specified)")
+	scanCmd.PersistentFlags().StringVar(&vpcID, "vpc-id", "", "Specific VPC ID to analyze (optional)")
+	scanCmd.PersistentFlags().StringSliceVar(&vpcIDs, "vpc-ids", []string{}, "Specific VPC IDs to analyze (optional)")
+	scanCmd.PersistentFlags().StringSliceVar(&natIDs, "nat-gateway-ids", []string{}, "Specific NAT Gateway IDs to analyze (optional)")
 
 	// Deep scan specific flags
 	deepCmd.Flags().IntVarP(&duration, "duration", "d", 15, "Flow Log collection duration in minutes (max 60)")
-	deepCmd.Flags().StringSliceVar(&natIDs, "nat-gateway-ids", []string{}, "Specific NAT Gateway IDs to analyze (optional)")
-	deepCmd.Flags().StringVar(&vpcID, "vpc-id", "", "Filter NAT Gateways by VPC ID (optional)")
 	deepCmd.Flags().BoolVar(&deepDoctor, "doctor", true, "Run doctor preflight checks before scan")
 	quickCmd.Flags().BoolVar(&quickDoctor, "doctor", true, "Run doctor preflight checks before scan")
 	deepCmd.Flags().StringVar(&deepUIMode, "ui", "stream", "UI mode [stream|tui]")
@@ -186,7 +188,7 @@ func runQuickScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Run quick scan with UI
-	return ui.RunQuickScan(ctx, scanner, quickUIMode)
+	return ui.RunQuickScan(ctx, scanner, quickUIMode, selectedVPCIDs(), normalizedNATIDs())
 }
 
 func runDeepScan(cmd *cobra.Command, args []string) error {
@@ -228,7 +230,7 @@ func runDeepScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Run deep scan with UI
-	return ui.RunDeepScan(ctx, scanner, selectedRegion, duration, natIDs, vpcID, deepUIMode, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerContext)
+	return ui.RunDeepScanWithTargets(ctx, scanner, selectedRegion, duration, selectedVPCIDs(), normalizedNATIDs(), "", deepUIMode, autoApprove, autoCleanup, exportFormat, outputFile, datahubAPIKey, datahubCustomerContext)
 }
 
 func runDemoScan(cmd *cobra.Command, args []string) error {
@@ -245,6 +247,31 @@ func isValidUIMode(mode string) bool {
 	default:
 		return false
 	}
+}
+
+func selectedVPCIDs() []string {
+	return normalizeIDs(append([]string{vpcID}, vpcIDs...))
+}
+
+func normalizedNATIDs() []string {
+	return normalizeIDs(natIDs)
+}
+
+func normalizeIDs(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	ids := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		ids = append(ids, value)
+	}
+	return ids
 }
 
 func runDoctorPreflight(ctx context.Context, scanner *core.Scanner, selectedRegion, selectedProfile string, requiresFlowLogsRole bool) error {

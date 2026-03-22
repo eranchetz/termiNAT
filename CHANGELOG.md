@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-03-22
+
+### Added
+- Region-scoped target selection for `scan quick` and `scan deep`, including `--vpc-id`, `--vpc-ids`, and `--nat-gateway-ids`.
+- Canonical multi-VPC report and DataHub view models so stream output, TUI, markdown, and exports share one data source.
+
+### Changed
+- Docs now lead with the simplest operating model: one AWS region per run, then narrow to the specific VPCs or NAT Gateways you care about.
+- Release and testing guidance now point to the current smoke/E2E scripts and updated playground workflow.
+
+### Fixed
+- Eliminated the stale release-note/doc drift around the current release process and versioning.
+- Hardened the release workflow so the GitHub release can use curated release notes when present.
+
 ## [0.7.2] - 2026-03-12
 
 ### Fixed

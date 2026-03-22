@@ -10,7 +10,7 @@ import (
 )
 
 func TestRunQuickScanInvalidUIMode(t *testing.T) {
-	err := RunQuickScan(context.Background(), nil, "invalid")
+	err := RunQuickScan(context.Background(), nil, "invalid", nil, nil)
 	if err == nil {
 		t.Fatal("expected invalid UI mode error")
 	}

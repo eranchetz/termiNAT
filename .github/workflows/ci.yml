@@ -42,3 +42,6 @@ jobs:
 
       - name: go test
         run: go test ./...
+
+      - name: stream smoke
+        run: ./test/scripts/smoke-ui-stream.sh

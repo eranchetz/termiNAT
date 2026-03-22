@@ -38,24 +38,13 @@ type eventBatch struct {
 
 // BuildEvents creates DataHub events from scan results.
 // Produces 5 events per NAT: 1 aggregated + 4 per-service (S3, DynamoDB, ECR, Other).
-func BuildEvents(accountID, region string, nats []types.NATGateway, stats *analysis.TrafficStats, cost *analysis.CostEstimate, endpoints *analysis.EndpointAnalysis) []Event {
+func BuildEvents(accountID, region string, nats []types.NATGateway, stats *analysis.TrafficStats, cost *analysis.CostEstimate, endpointAnalyses map[string]*analysis.EndpointAnalysis) []Event {
 	if stats == nil || cost == nil {
 		return nil
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	date := time.Now().UTC().Format("2006-01-02")
-
-	// Determine endpoint status per service
-	s3Status, dynamoStatus := "missing", "missing"
-	if endpoints != nil {
-		if endpoints.S3Endpoint != nil {
-			s3Status = "configured"
-		}
-		if endpoints.DynamoEndpoint != nil {
-			dynamoStatus = "configured"
-		}
-	}
 
 	type svcData struct {
 		name     string
@@ -67,8 +56,8 @@ func BuildEvents(accountID, region string, nats []types.NATGateway, stats *analy
 	}
 
 	services := []svcData{
-		{"S3", "S3 traffic via NAT", cost.S3SavingsMonthly, cost.S3SavingsMonthly, cost.S3DataGB, s3Status},
-		{"DynamoDB", "DynamoDB traffic via NAT", cost.DynamoSavingsMonthly, cost.DynamoSavingsMonthly, cost.DynamoDataGB, dynamoStatus},
+		{"S3", "S3 traffic via NAT", cost.S3SavingsMonthly, cost.S3SavingsMonthly, cost.S3DataGB, "missing"},
+		{"DynamoDB", "DynamoDB traffic via NAT", cost.DynamoSavingsMonthly, cost.DynamoSavingsMonthly, cost.DynamoDataGB, "missing"},
 		{"ECR", "ECR traffic via NAT", cost.OtherDataGB * cost.NATGatewayPricePerGB * (stats.ECRPercentage() / cost.OtherPercentage()), 0, cost.OtherDataGB * (stats.ECRPercentage() / cost.OtherPercentage()), "n-a"},
 		{"Other", "Other traffic via NAT", cost.OtherDataGB * cost.NATGatewayPricePerGB, 0, cost.OtherDataGB, "n-a"},
 	}
@@ -81,6 +70,20 @@ func BuildEvents(accountID, region string, nats []types.NATGateway, stats *analy
 
 	var events []Event
 	for _, nat := range nats {
+		s3Status, dynamoStatus := "missing", "missing"
+		if endpointAnalyses != nil {
+			if natAnalysis := endpointAnalyses[nat.VPCID]; natAnalysis != nil {
+				if natAnalysis.S3Endpoint != nil {
+					s3Status = "configured"
+				}
+				if natAnalysis.DynamoEndpoint != nil {
+					dynamoStatus = "configured"
+				}
+			}
+		}
+		services[0].epStatus = s3Status
+		services[1].epStatus = dynamoStatus
+
 		baseDims := []Dimension{
 			{Key: "project_id", Value: accountID, Type: "fixed"},
 			{Key: "region", Value: region, Type: "fixed"},

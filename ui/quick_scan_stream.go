@@ -8,12 +8,12 @@ import (
 	"github.com/doitintl/terminator/internal/core"
 )
 
-func RunQuickScanStream(ctx context.Context, scanner *core.Scanner) error {
+func RunQuickScanStream(ctx context.Context, scanner *core.Scanner, vpcIDs, natIDs []string) error {
 	started := time.Now()
 	quickLog("scan", "Quick scan started (region=%s account=%s ui=stream)", scanner.GetRegion(), scanner.GetAccountID())
 
 	quickLog("discover", "Discovering NAT Gateways")
-	nats, err := discoverNATsForQuickScan(ctx, scanner)
+	nats, err := discoverNATsForQuickScan(ctx, scanner, vpcIDs, natIDs)
 	if err != nil {
 		return err
 	}

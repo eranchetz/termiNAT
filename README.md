@@ -11,7 +11,7 @@ termiNATor is a CLI tool that analyzes your AWS NAT Gateway traffic to identify 
 - **Cost Estimation**: Calculate potential monthly and annual savings with clear disclaimers
 - **Traffic Classification**: Automatically identifies S3, DynamoDB, and other AWS service traffic
 - **Detailed Reporting**: Comprehensive analysis with actionable recommendations
-- **Multi-Region Support**: Works across all AWS regions with regional pricing
+- **Regional Targeting**: Scan one AWS region at a time, then narrow by VPC or NAT Gateway IDs when needed
 
 ## Why termiNATor?
 
@@ -25,7 +25,7 @@ NAT Gateways charge $0.045 per GB for data processing. If your applications acce
 
 ```bash
 # Install
-git clone https://github.com/doitintl/terminator.git
+git clone https://github.com/eranchetz/termiNAT.git
 cd terminator
 go build -o terminat
 
@@ -36,8 +36,14 @@ export AWS_REGION=us-east-1
 # Run quick scan (instant, no resources created)
 ./terminat scan quick --region us-east-1
 
-# Run deep dive scan (analyzes actual traffic, ~10 minutes)
+# Run deep dive scan (analyzes actual traffic)
 ./terminat scan deep --region us-east-1 --duration 5
+
+# Narrow the scan to one VPC
+./terminat scan deep --region us-east-1 --vpc-id vpc-xxx --duration 5
+
+# Scan multiple VPCs or NAT Gateways in the same region
+./terminat scan deep --region us-east-1 --vpc-ids vpc-a,vpc-b --nat-gateway-ids nat-a,nat-b --duration 5
 
 # Run demo scan with fake data (stream output by default)
 ./terminat scan demo
@@ -48,7 +54,7 @@ export AWS_REGION=us-east-1
 ```
 
 📖 **[Complete Usage Guide](USAGE.md)** - Detailed instructions for production use  
-🧪 **[E2E Testing Guide](E2E_TESTING.md)** - Run automated tests with sample infrastructure
+🧪 **[E2E Testing Guide](test/TESTING.md)** - Run automated tests with sample infrastructure
 
 ## Installation
 
@@ -59,7 +65,7 @@ go install github.com/doitintl/terminator@latest
 Or build from source:
 
 ```bash
-git clone https://github.com/doitintl/terminator.git
+git clone https://github.com/eranchetz/termiNAT.git
 cd terminator
 go build -o terminat
 ```
@@ -147,13 +153,13 @@ Use `--ui tui` for the interactive Bubble Tea interface.
 
 This will:
 1. Create temporary VPC Flow Logs for your NAT Gateway
-2. Wait 5 minutes for Flow Logs to initialize
+2. Wait for Flow Logs to become active and start delivering data
 3. Collect traffic data for 5 minutes (configurable: 5-60 minutes)
 4. Classify traffic by destination service (S3, DynamoDB, other)
 5. Calculate cost estimates and potential savings
 6. Clean up Flow Logs (log data retained for review)
 
-**Total time:** Collection duration + 5 minutes (startup delay)
+**Total time:** Flow Logs activation time + collection duration
 
 **Example output:**
 ```
@@ -208,7 +214,7 @@ terminat scan deep --region <region> --duration <minutes> --ui tui
 terminat scan demo --ui tui
 
 # Scan specific NAT Gateway
-terminat scan deep --region us-east-1 --nat-id nat-1234567890abcdef0
+terminat scan deep --region us-east-1 --nat-gateway-ids nat-1234567890abcdef0
 ```
 
 ### UI Modes
@@ -297,7 +303,7 @@ terminator/
 
 1. **Discovery**: Finds NAT Gateways and their network interfaces
 2. **Flow Logs Creation**: Creates temporary VPC Flow Logs on the NAT Gateway ENI
-3. **Startup Delay**: Waits 5 minutes for Flow Logs to begin delivering data
+3. **Startup Delay**: Waits for Flow Logs to begin delivering data
 4. **Collection**: Captures network traffic for the specified duration
 5. **Analysis**: 
    - Downloads AWS IP ranges for S3 and DynamoDB
@@ -333,7 +339,7 @@ terminator/
 
 ### "No traffic data collected"
 
-- Flow Logs require 5-10 minutes to start delivering data
+- Flow Logs may take several minutes to start delivering data
 - Ensure applications are actively using the NAT Gateway during collection
 - Check CloudWatch Logs console for Flow Logs data
 
@@ -355,8 +361,8 @@ Apache License 2.0
 ## Support
 
 For issues and questions:
-- GitHub Issues: https://github.com/doitintl/terminator/issues
-- Documentation: https://github.com/doitintl/terminator/wiki
+- GitHub Issues: https://github.com/eranchetz/termiNAT/issues
+- Documentation: https://github.com/eranchetz/termiNAT/wiki
 
 ## Roadmap
 

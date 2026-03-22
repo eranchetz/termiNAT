@@ -37,6 +37,8 @@ var (
 type quickScanModel struct {
 	scanner  *core.Scanner
 	ctx      context.Context
+	vpcIDs   []string
+	natIDs   []string
 	spinner  spinner.Model
 	step     string
 	nats     []types.NATGateway
@@ -63,18 +65,18 @@ type scanErrorMsg struct {
 
 type scanCompleteMsg struct{}
 
-func RunQuickScan(ctx context.Context, scanner *core.Scanner, uiMode string) error {
+func RunQuickScan(ctx context.Context, scanner *core.Scanner, uiMode string, vpcIDs, natIDs []string) error {
 	switch strings.ToLower(strings.TrimSpace(uiMode)) {
 	case "", "stream":
-		return RunQuickScanStream(ctx, scanner)
+		return RunQuickScanStream(ctx, scanner, vpcIDs, natIDs)
 	case "tui":
-		return runQuickScanTUI(ctx, scanner)
+		return runQuickScanTUI(ctx, scanner, vpcIDs, natIDs)
 	default:
 		return fmt.Errorf("invalid --ui value %q (valid: stream, tui)", uiMode)
 	}
 }
 
-func runQuickScanTUI(ctx context.Context, scanner *core.Scanner) error {
+func runQuickScanTUI(ctx context.Context, scanner *core.Scanner, vpcIDs, natIDs []string) error {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4"))
@@ -82,6 +84,8 @@ func runQuickScanTUI(ctx context.Context, scanner *core.Scanner) error {
 	m := quickScanModel{
 		scanner: scanner,
 		ctx:     ctx,
+		vpcIDs:  normalizeIDs(vpcIDs),
+		natIDs:  normalizeIDs(natIDs),
 		spinner: s,
 		step:    "Initializing...",
 	}
@@ -196,7 +200,7 @@ func (m quickScanModel) renderResults() string {
 func (m quickScanModel) discoverNATs() tea.Msg {
 	m.step = "Discovering NAT Gateways..."
 
-	nats, err := discoverNATsForQuickScan(m.ctx, m.scanner)
+	nats, err := discoverNATsForQuickScan(m.ctx, m.scanner, m.vpcIDs, m.natIDs)
 	if err != nil {
 		return scanErrorMsg{err: err}
 	}
@@ -219,8 +223,12 @@ func (m quickScanModel) complete() tea.Msg {
 	return scanCompleteMsg{}
 }
 
-func discoverNATsForQuickScan(ctx context.Context, scanner *core.Scanner) ([]types.NATGateway, error) {
-	return scanner.DiscoverNATGateways(ctx)
+func discoverNATsForQuickScan(ctx context.Context, scanner *core.Scanner, vpcIDs, natIDs []string) ([]types.NATGateway, error) {
+	nats, err := scanner.DiscoverNATGateways(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return filterNATGateways(nats, vpcIDs, natIDs)
 }
 
 func analyzeQuickFindings(ctx context.Context, scanner *core.Scanner, nats []types.NATGateway) ([]types.Finding, error) {
